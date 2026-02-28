@@ -88,6 +88,20 @@ export class PhysicsEngine {
     // Update position
     this.updatePosition(player, deltaTime);
 
+    // Prevent jumping through platforms from below
+    if (player.velocity.y < 0) {
+      for (const platform of platforms) {
+        if (!platform.active) continue;
+        if (!CollisionDetection.checkAABBCollision(player, platform)) continue;
+
+        const platformBottom = platform.position.y + platform.size.y;
+        if (player.position.y + player.size.y > platformBottom) {
+          player.position.y = platformBottom;
+          player.velocity.y = 0;
+        }
+      }
+    }
+
     // Check ground collision
     const wasOnGround = player.isOnGround;
     player.isOnGround = CollisionDetection.isOnGround(player, platforms, 5);

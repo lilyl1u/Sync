@@ -126,7 +126,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             <div className="text-white font-mono">
               <div className="text-sm text-purple-300">Distance</div>
               <div className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                {Math.floor(gameState.player.position.x / 10)}m
+                {Math.max(0, Math.floor((gameState.player.position.x - 100) / 10))}m
               </div>
             </div>
           </div>
@@ -175,7 +175,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                 <div className="text-center mb-8">
                   <div className="text-lg text-purple-300 mb-2">Distance Traveled</div>
                   <div className="text-6xl font-bold text-white">
-                    {Math.floor(gameState.player.position.x / 10)}m
+                    {Math.max(0, Math.floor((gameState.player.position.x - 100) / 10))}m
                   </div>
                 </div>
                 <button
