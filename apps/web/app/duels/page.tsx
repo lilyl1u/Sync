@@ -1,10 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
-const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No 0/O, 1/I to avoid confusion
-const LOBBIES_KEY = 'sync-duels-lobbies';
+const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function generateLobbyCode(): string {
   let code = '';
@@ -16,86 +25,141 @@ function generateLobbyCode(): string {
 
 type LobbyState =
   | { type: 'idle' }
-  | { type: 'create_waiting'; code: string; bet: string; playerCount: number }
-  | { type: 'join_waiting'; code: string; bet: string; playerCount: number }
-  | { type: 'ready'; code: string; bet: string };
+  | { type: 'creating' }
+  | { type: 'joining' }
+  | { type: 'in_lobby'; code: string; bet: string; role: 'host' | 'joiner'; playerCount: number };
 
 export default function DuelsPage() {
   const [activeTab, setActiveTab] = useState<'create' | 'join'>('create');
   const [createBet, setCreateBet] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [lobbyState, setLobbyState] = useState<LobbyState>({ type: 'idle' });
+  const unsubRef = useRef<(() => void) | null>(null);
 
-  const handleCreateLobby = (e: React.FormEvent) => {
+  // Clean up Firestore listener on unmount or lobby leave
+  useEffect(() => {
+    return () => {
+      unsubRef.current?.();
+    };
+  }, []);
+
+  const subscribeTo = useCallback((code: string, role: 'host' | 'joiner') => {
+    unsubRef.current?.();
+    const unsub = onSnapshot(doc(db, 'lobbies', code), (snap) => {
+      if (!snap.exists()) {
+        setLobbyState({ type: 'idle' });
+        return;
+      }
+      const data = snap.data();
+      const playerCount = data.joinerWallet ? 2 : 1;
+      setLobbyState({
+        type: 'in_lobby',
+        code,
+        bet: data.bet,
+        role,
+        playerCount,
+      });
+    });
+    unsubRef.current = unsub;
+  }, []);
+
+  const handleCreateLobby = async (e: React.FormEvent) => {
     e.preventDefault();
+    setCreateError(null);
     const bet = createBet.trim();
     if (!bet) return;
+
+    setLobbyState({ type: 'creating' });
     const code = generateLobbyCode();
-    // Store lobby for joiners to look up bet (frontend-only mock via localStorage)
     try {
-      const lobbies: Record<string, { bet: string }> = JSON.parse(
-        localStorage.getItem(LOBBIES_KEY) ?? '{}'
-      );
-      lobbies[code] = { bet };
-      localStorage.setItem(LOBBIES_KEY, JSON.stringify(lobbies));
-    } catch {
-      // ignore
+      await setDoc(doc(db, 'lobbies', code), {
+        code,
+        bet,
+        hostWallet: null,
+        joinerWallet: null,
+        status: 'waiting',
+        createdAt: serverTimestamp(),
+      });
+      subscribeTo(code, 'host');
+    } catch (err) {
+      console.error('Failed to create lobby:', err);
+      setCreateError('Failed to create lobby. Check your connection.');
+      setLobbyState({ type: 'idle' });
     }
-    setLobbyState({
-      type: 'create_waiting',
-      code,
-      bet,
-      playerCount: 1,
-    });
   };
 
-  const handleJoinLobby = (e: React.FormEvent) => {
+  const handleJoinLobby = async (e: React.FormEvent) => {
     e.preventDefault();
     setJoinError(null);
     const code = joinCode.trim().toUpperCase();
     if (!code) return;
-    let bet: string;
+
+    setLobbyState({ type: 'joining' });
     try {
-      const lobbies: Record<string, { bet: string }> = JSON.parse(
-        localStorage.getItem(LOBBIES_KEY) ?? '{}'
-      );
-      const lobby = lobbies[code];
-      if (!lobby) {
-        setJoinError('Lobby not found. Check the code or ask the host to create the lobby first.');
+      const lobbyRef = doc(db, 'lobbies', code);
+      const snap = await getDoc(lobbyRef);
+      if (!snap.exists()) {
+        setJoinError('Lobby not found. Check the code and try again.');
+        setLobbyState({ type: 'idle' });
         return;
       }
-      bet = lobby.bet;
-    } catch {
-      setJoinError('Could not look up lobby.');
-      return;
+      const data = snap.data();
+      if (data.joinerWallet || data.status !== 'waiting') {
+        setJoinError('Lobby is already full or in progress.');
+        setLobbyState({ type: 'idle' });
+        return;
+      }
+      await updateDoc(lobbyRef, {
+        joinerWallet: 'joined',
+        status: 'ready',
+      });
+      subscribeTo(code, 'joiner');
+    } catch (err) {
+      console.error('Failed to join lobby:', err);
+      setJoinError('Failed to join lobby. Check your connection.');
+      setLobbyState({ type: 'idle' });
     }
-    setLobbyState({
-      type: 'join_waiting',
-      code,
-      bet,
-      playerCount: 2,
-    });
   };
 
   const handleCopyCode = () => {
-    if (lobbyState.type === 'create_waiting') {
+    if (lobbyState.type === 'in_lobby') {
       navigator.clipboard.writeText(lobbyState.code);
     }
   };
 
-  const handleLeaveLobby = () => {
+  const handleLeaveLobby = async () => {
+    if (lobbyState.type === 'in_lobby') {
+      unsubRef.current?.();
+      unsubRef.current = null;
+      const { code, role } = lobbyState;
+      try {
+        if (role === 'host') {
+          await deleteDoc(doc(db, 'lobbies', code));
+        } else {
+          await updateDoc(doc(db, 'lobbies', code), {
+            joinerWallet: null,
+            status: 'waiting',
+          });
+        }
+      } catch {
+        // best-effort cleanup
+      }
+    }
     setLobbyState({ type: 'idle' });
     setCreateBet('');
     setJoinCode('');
     setJoinError(null);
+    setCreateError(null);
   };
 
-  const isInLobby = lobbyState.type !== 'idle';
+  const isInLobby = lobbyState.type === 'in_lobby';
+  const isBusy = lobbyState.type === 'creating' || lobbyState.type === 'joining';
 
   return (
     <div className="min-h-screen relative overflow-hidden">
-      {/* Background layers — matching home page */}
+      {/* Background layers */}
       <img
         src="/assets/backgrounds/first.svg"
         alt=""
@@ -132,7 +196,6 @@ export default function DuelsPage() {
           </p>
         </div>
 
-        {/* Back link */}
         <Link
           href="/"
           className="absolute top-6 left-6 text-purple-300 hover:text-white font-mono text-sm transition-colors"
@@ -140,7 +203,7 @@ export default function DuelsPage() {
           ← Home
         </Link>
 
-        {!isInLobby ? (
+        {!isInLobby && !isBusy ? (
           <>
             {/* Tab switcher */}
             <div className="flex gap-2 mb-8 p-1 bg-black/30 backdrop-blur-sm rounded-xl border border-purple-500/30">
@@ -171,7 +234,7 @@ export default function DuelsPage() {
             {/* Create Lobby form */}
             {activeTab === 'create' && (
               <form
-                onSubmit={handleCreateLobby}
+                onSubmit={(e) => { void handleCreateLobby(e); }}
                 className="relative z-20 w-full max-w-md bg-black/40 backdrop-blur-lg rounded-2xl border-2 border-purple-500/40 p-8 shadow-2xl shadow-purple-500/20"
               >
                 <h2 className="text-xl font-bold text-white mb-2 font-mono">Create a duel lobby</h2>
@@ -187,6 +250,9 @@ export default function DuelsPage() {
                     className="w-full px-4 py-3 bg-black/50 border border-purple-500/50 rounded-lg text-white font-mono placeholder:text-purple-400/50 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent"
                   />
                 </label>
+                {createError && (
+                  <p className="mb-4 text-red-400 text-sm font-mono">{createError}</p>
+                )}
                 <button
                   type="submit"
                   className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg font-mono hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -199,7 +265,7 @@ export default function DuelsPage() {
             {/* Join Lobby form */}
             {activeTab === 'join' && (
               <form
-                onSubmit={handleJoinLobby}
+                onSubmit={(e) => { void handleJoinLobby(e); }}
                 className="relative z-20 w-full max-w-md bg-black/40 backdrop-blur-lg rounded-2xl border-2 border-purple-500/40 p-8 shadow-2xl shadow-purple-500/20"
               >
                 <h2 className="text-xl font-bold text-white mb-2 font-mono">Join a duel</h2>
@@ -231,26 +297,28 @@ export default function DuelsPage() {
               </form>
             )}
           </>
-        ) : (
+        ) : isBusy ? (
+          <div className="w-full max-w-md bg-black/40 backdrop-blur-lg rounded-2xl border-2 border-purple-500/40 p-8 shadow-2xl shadow-purple-500/20 text-center">
+            <div className="animate-pulse text-purple-300 font-mono text-lg">
+              {lobbyState.type === 'creating' ? 'Creating lobby...' : 'Joining lobby...'}
+            </div>
+          </div>
+        ) : lobbyState.type === 'in_lobby' ? (
           /* In-lobby view */
           <div className="w-full max-w-md bg-black/40 backdrop-blur-lg rounded-2xl border-2 border-purple-500/40 p-8 shadow-2xl shadow-purple-500/20">
             <div className="text-center">
               <h2 className="text-xl font-bold text-white mb-1 font-mono">
-                {lobbyState.type === 'create_waiting'
-                  ? 'Lobby created'
-                  : lobbyState.type === 'join_waiting'
-                    ? 'Joined lobby'
-                    : 'Ready to duel'}
+                {lobbyState.playerCount < 2
+                  ? 'Waiting for opponent...'
+                  : 'Ready to duel!'}
               </h2>
               <p className="text-purple-300 text-sm mb-6">
-                {lobbyState.type === 'create_waiting'
-                  ? 'Share the code below. Waiting for opponent...'
-                  : lobbyState.type === 'join_waiting'
-                    ? 'Host will start the duel when ready.'
-                    : 'Both players are in. Start the game!'}
+                {lobbyState.playerCount < 2
+                  ? 'Share the code below with your opponent.'
+                  : 'Both players are in. Start the game!'}
               </p>
 
-              {/* Lobby code — prominent */}
+              {/* Lobby code */}
               <div className="mb-6">
                 <span className="text-purple-400 text-xs font-mono uppercase tracking-wider block mb-2">
                   Lobby code
@@ -259,15 +327,13 @@ export default function DuelsPage() {
                   <span className="text-4xl font-bold font-mono tracking-[0.3em] text-white bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">
                     {lobbyState.code}
                   </span>
-                  {lobbyState.type === 'create_waiting' && (
-                    <button
-                      type="button"
-                      onClick={handleCopyCode}
-                      className="px-3 py-1.5 text-xs font-mono bg-purple-600/60 hover:bg-purple-600 text-white rounded-lg transition-colors"
-                    >
-                      Copy
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={handleCopyCode}
+                    className="px-3 py-1.5 text-xs font-mono bg-purple-600/60 hover:bg-purple-600 text-white rounded-lg transition-colors"
+                  >
+                    Copy
+                  </button>
                 </div>
               </div>
 
@@ -279,29 +345,27 @@ export default function DuelsPage() {
                 </div>
                 <div className="flex justify-between text-sm font-mono">
                   <span className="text-purple-400">Players</span>
-                  <span className="text-white">
-                    {lobbyState.type === 'create_waiting'
-                      ? '1/2'
-                      : lobbyState.type === 'join_waiting'
-                        ? '2/2'
-                        : '2/2'}
-                  </span>
+                  <span className="text-white">{lobbyState.playerCount}/2</span>
+                </div>
+                <div className="flex justify-between text-sm font-mono">
+                  <span className="text-purple-400">Role</span>
+                  <span className="text-white capitalize">{lobbyState.role}</span>
                 </div>
               </div>
 
               {/* Actions */}
               <div className="flex flex-col gap-3">
-                {lobbyState.type === 'join_waiting' && (
+                {lobbyState.playerCount === 2 && (
                   <Link
                     href="/game"
                     className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg font-mono hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
                   >
-                    Start duel (placeholder)
+                    Start Duel
                   </Link>
                 )}
                 <button
                   type="button"
-                  onClick={handleLeaveLobby}
+                  onClick={() => { void handleLeaveLobby(); }}
                   className="w-full py-3 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg font-mono hover:border-purple-300 hover:bg-purple-500/20 hover:text-white transition-all"
                 >
                   Leave lobby
@@ -309,11 +373,7 @@ export default function DuelsPage() {
               </div>
             </div>
           </div>
-        )}
-
-        <p className="mt-8 text-purple-400/70 text-sm font-mono max-w-md text-center">
-          Duels UI only — no backend yet. Lobbies are stored in localStorage; join works across tabs in the same browser.
-        </p>
+        ) : null}
       </div>
     </div>
   );
