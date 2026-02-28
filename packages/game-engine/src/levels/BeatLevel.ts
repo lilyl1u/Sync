@@ -1,0 +1,131 @@
+/**
+ * Beat-synced Level - Generates obstacles from audio beat timestamps.
+ * Each beat time maps to an X position: x = beatTime * playerSpeed.
+ * The game engine doesn't know about audio — it just gets a Level with
+ * obstacles placed at the right positions to match the rhythm.
+ */
+import { Level, LevelSegment, GameObject, GameObjectType, Platform, Obstacle } from '../types';
+
+const GROUND_Y = 500;
+const FLOOR_EXTENSION = 500000;
+
+export interface BeatLevelConfig {
+  /** Beat timestamps in seconds */
+  beats: number[];
+  /** Player run speed in px/s (must match GameEngineConfig.playerSpeed) */
+  playerSpeed: number;
+  /** Optional: per-beat intensity values (0-1). Higher = block, lower = spike */
+  intensities?: number[];
+  /** Probability that a given beat actually gets an obstacle (default 0.4).
+   *  Lower = more empty space / breathing room. */
+  placementChance?: number;
+  /** Fraction of placed obstacles that are blocks vs spikes (default 0.35) */
+  blockChance?: number;
+  /** Minimum gap in seconds between obstacles to avoid impossible clusters (default 0.3) */
+  minGapSeconds?: number;
+  /** Seed for deterministic randomness so the same song always produces the same level */
+  seed?: number;
+}
+
+function seededRandom(seed: number) {
+  return function next(): number {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+}
+
+function generateObstaclesFromBeats(config: BeatLevelConfig): Obstacle[] {
+  const {
+    beats,
+    playerSpeed,
+    intensities,
+    placementChance = 0.4,
+    blockChance = 0.35,
+    minGapSeconds = 0.3,
+    seed = 42,
+  } = config;
+
+  const rng = seededRandom(seed);
+  const obstacles: Obstacle[] = [];
+  let lastPlacedTime = -Infinity;
+
+  for (let i = 0; i < beats.length; i++) {
+    const beatTime = beats[i];
+
+    // Skip the first ~1.5 seconds so the player has a runway
+    if (beatTime < 1.5) continue;
+    // Skip beats that are too close together
+    if (beatTime - lastPlacedTime < minGapSeconds) continue;
+
+    // Only place an obstacle on a fraction of beats — more breathing room
+    // Use intensity to bias: louder beats are more likely to get an obstacle
+    const intensity = intensities ? intensities[i] ?? 0.5 : 0.5;
+    const adjustedChance = placementChance + intensity * 0.2;
+    if (rng() > adjustedChance) continue;
+
+    const x = beatTime * playerSpeed;
+    const isBlock = rng() < blockChance;
+
+    if (isBlock) {
+      obstacles.push({
+        id: `beat-block-${i}`,
+        position: { x, y: GROUND_Y - 50 },
+        velocity: { x: 0, y: 0 },
+        size: { x: 50, y: 50 },
+        type: GameObjectType.OBSTACLE_BLOCK,
+        active: true,
+        damage: 1,
+      });
+    } else {
+      obstacles.push({
+        id: `beat-spike-${i}`,
+        position: { x, y: GROUND_Y - 30 },
+        velocity: { x: 0, y: 0 },
+        size: { x: 30, y: 30 },
+        type: GameObjectType.OBSTACLE_SPIKE,
+        active: true,
+        damage: 1,
+      });
+    }
+
+    lastPlacedTime = beatTime;
+  }
+
+  return obstacles;
+}
+
+export function createBeatLevel(config: BeatLevelConfig): Level {
+  const maxBeatTime = config.beats.length > 0
+    ? config.beats[config.beats.length - 1]
+    : 60;
+  const totalLength = Math.max(maxBeatTime * config.playerSpeed + 2000, FLOOR_EXTENSION);
+
+  const floor: Platform = {
+    id: 'solid-floor',
+    position: { x: 0, y: GROUND_Y },
+    velocity: { x: 0, y: 0 },
+    size: { x: totalLength, y: 50 },
+    type: GameObjectType.PLATFORM,
+    active: true,
+    width: totalLength,
+  };
+
+  const obstacles = generateObstaclesFromBeats(config);
+
+  const segment: LevelSegment = {
+    id: 'beat-segment',
+    startX: 0,
+    length: totalLength,
+    difficulty: 0.5,
+    objects: [floor, ...obstacles],
+  };
+
+  return {
+    id: 'beat-level',
+    name: 'Beat Level',
+    segments: [segment],
+    totalLength,
+    difficulty: 0.5,
+    generatedBy: 'procedural',
+  };
+}

@@ -2,7 +2,17 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { GameEngine, Renderer, createInfiniteLevel, GameState, Player, GameObjectType } from '@geometrydash/game-engine';
+import {
+  GameEngine,
+  Renderer,
+  createInfiniteLevel,
+  createBeatLevel,
+  GameState,
+} from '@geometrydash/game-engine';
+import { detectBeats, DetectedBeat } from '../utils/beatDetector';
+
+const PLAYER_SPEED = 300;
+const AUDIO_URL = '/song/song.mp3';
 
 interface GeometryDashGameProps {
   width?: number;
@@ -20,13 +30,26 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const rendererRef = useRef<Renderer | null>(null);
+
+  // Audio refs (not state — we don't want re-renders on audio changes)
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioBufferRef = useRef<AudioBuffer | null>(null);
+  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const audioStartedRef = useRef(false);
+  const beatsRef = useRef<DetectedBeat[]>([]);
+
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isGameOver, setIsGameOver] = useState(false);
   const [showExtractModal, setShowExtractModal] = useState(false);
   const [hasExtracted, setHasExtracted] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const [audioLoaded, setAudioLoaded] = useState(false);
+  const [audioError, setAudioError] = useState(false);
+  const [loadingAudio, setLoadingAudio] = useState(true);
 
-  // Initialize game
+  // ------------------------------------------------------------------
+  // Load & analyse audio on mount, then build the level
+  // ------------------------------------------------------------------
   useEffect(() => {
     if (!canvasRef.current) return;
 
@@ -34,97 +57,173 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const level = createInfiniteLevel();
+    let cancelled = false;
 
-    // Create game engine
-    const engine = new GameEngine(level, {
-      canvasWidth: width,
-      canvasHeight: height,
-      playerSpeed: 300,
-    });
-
-    // Create renderer
-    const renderer = new Renderer({
-      canvas,
-      width,
-      height,
-    });
-
-    // Set up render callback (engine handles canvas rendering)
-    engine.onRender((state) => {
-      renderer.render(state);
-    });
-
-    // Set up game over callback
-    engine.onGameOver((score) => {
-      setIsGameOver(true);
-      console.log('Game Over! Final score:', score);
-    });
-
-    // Initial render so user sees the level (game starts on Start button click)
-    renderer.render(engine.getState());
-
-    engineRef.current = engine;
+    const renderer = new Renderer({ canvas, width, height });
     rendererRef.current = renderer;
 
-    // Cleanup
+    (async () => {
+      let level;
+
+      try {
+        // Fetch and decode
+        const response = await fetch(AUDIO_URL);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+
+        const audioCtx = new AudioContext();
+        audioCtxRef.current = audioCtx;
+
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        audioBufferRef.current = audioBuffer;
+
+        if (cancelled) return;
+
+        // Detect beats
+        const beats = await detectBeats(audioBuffer);
+        beatsRef.current = beats;
+
+        // Build beat-synced level
+        level = createBeatLevel({
+          beats: beats.map((b) => b.time),
+          playerSpeed: PLAYER_SPEED,
+          intensities: beats.map((b) => b.intensity),
+        });
+
+        setAudioLoaded(true);
+      } catch {
+        // No audio file found — fall back to infinite procedural level
+        level = createInfiniteLevel();
+        setAudioError(true);
+      } finally {
+        setLoadingAudio(false);
+      }
+
+      if (cancelled) return;
+
+      const engine = new GameEngine(level, {
+        canvasWidth: width,
+        canvasHeight: height,
+        playerSpeed: PLAYER_SPEED,
+      });
+
+      engine.onRender((state) => renderer.render(state));
+      engine.onGameOver(() => {
+        setIsGameOver(true);
+        stopAudio();
+      });
+
+      renderer.render(engine.getState());
+      engineRef.current = engine;
+    })();
+
     return () => {
-      engine.destroy();
+      cancelled = true;
+      engineRef.current?.destroy();
       engineRef.current = null;
+      stopAudio();
+      if (audioCtxRef.current?.state !== 'closed') {
+        audioCtxRef.current?.close();
+      }
+      audioCtxRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [width, height]);
 
-  // Poll engine state via requestAnimationFrame for reliable real-time UI updates
+  // ------------------------------------------------------------------
+  // Audio playback helpers
+  // ------------------------------------------------------------------
+  const playAudio = useCallback(() => {
+    const audioCtx = audioCtxRef.current;
+    const buffer = audioBufferRef.current;
+    if (!audioCtx || !buffer) return;
+
+    // Stop any existing source
+    try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioCtx.destination);
+    source.start(0);
+    sourceNodeRef.current = source;
+    audioStartedRef.current = true;
+
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }, []);
+
+  const stopAudio = useCallback(() => {
+    try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
+    sourceNodeRef.current = null;
+    audioStartedRef.current = false;
+  }, []);
+
+  const pauseAudio = useCallback(() => {
+    audioCtxRef.current?.suspend();
+  }, []);
+
+  const resumeAudio = useCallback(() => {
+    audioCtxRef.current?.resume();
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Poll engine state for HUD updates
+  // ------------------------------------------------------------------
   useEffect(() => {
     let rafId: number;
     const tick = () => {
       const engine = engineRef.current;
-      if (engine) {
-        setGameState(engine.getState());
-      }
+      if (engine) setGameState(engine.getState());
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
   }, []);
 
+  // ------------------------------------------------------------------
+  // Game lifecycle callbacks
+  // ------------------------------------------------------------------
   const handleStart = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.start();
       setHasStarted(true);
-      // Focus game container so keyboard (space) reliably reaches the game
       gameContainerRef.current?.focus();
+      if (audioLoaded) playAudio();
     }
-  }, []);
+  }, [audioLoaded, playAudio]);
 
   const handleRestart = useCallback(() => {
     if (engineRef.current) {
+      stopAudio();
       engineRef.current.restart();
       engineRef.current.start();
       setIsGameOver(false);
       setHasExtracted(false);
       setHasStarted(true);
       gameContainerRef.current?.focus();
+      if (audioLoaded) playAudio();
     }
-  }, []);
+  }, [audioLoaded, playAudio, stopAudio]);
 
   const handleExtractConfirm = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.pause();
+      pauseAudio();
       setHasExtracted(true);
       setShowExtractModal(false);
-      // Cash out complete - user successfully extracted before dying
     }
-  }, []);
+  }, [pauseAudio]);
 
   const handleExtractCancel = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.resume();
+      resumeAudio();
     }
     setShowExtractModal(false);
-  }, []);
+  }, [resumeAudio]);
 
-  // Keyboard controls for restart and extract
+  // ------------------------------------------------------------------
+  // Keyboard shortcuts
+  // ------------------------------------------------------------------
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.key === 'r' || e.key === 'R') {
@@ -135,10 +234,11 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         e.preventDefault();
         if (engineRef.current) {
           engineRef.current.pause();
+          pauseAudio();
           setShowExtractModal(true);
         }
       }
-      if (e.key === 'Enter' && !hasStarted) {
+      if (e.key === 'Enter' && !hasStarted && !loadingAudio) {
         e.preventDefault();
         handleStart();
       }
@@ -146,8 +246,11 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [handleRestart, handleStart, isGameOver, hasExtracted, hasStarted, showExtractModal]);
+  }, [handleRestart, handleStart, pauseAudio, isGameOver, hasExtracted, hasStarted, showExtractModal, loadingAudio]);
 
+  // ------------------------------------------------------------------
+  // Render
+  // ------------------------------------------------------------------
   return (
     <div
       ref={gameContainerRef}
@@ -155,7 +258,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       className="relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none"
       aria-label="Game"
     >
-      {/* Canvas */}
       <canvas
         ref={canvasRef}
         width={width}
@@ -163,30 +265,41 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         className="border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
       />
 
-      {/* Start screen */}
+      {/* Start / loading screen */}
       {!hasStarted && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-10">
           <div className="bg-black/50 backdrop-blur-sm rounded-2xl border-2 border-purple-500 p-12 text-center">
             <h2 className="text-3xl font-bold text-white mb-4 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              Ready to Play?
+              {loadingAudio ? 'Loading Audio...' : 'Ready to Play?'}
             </h2>
             <p className="text-purple-200 mb-8 max-w-md">
-              Survive as long as you can. Press ENTER or click Start to extract and cash out before you die!
+              {loadingAudio
+                ? 'Analyzing beats — hang tight.'
+                : audioLoaded
+                  ? 'Obstacles are synced to the music. Survive the beat!'
+                  : 'No audio file found — playing in infinite mode. Add /song.mp3 to enable beat sync.'}
             </p>
-            <button
-              onClick={handleStart}
-              className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl"
-            >
-              Start
-            </button>
+            {!loadingAudio && (
+              <button
+                onClick={handleStart}
+                className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl"
+              >
+                {audioLoaded ? '▶ Start' : 'Start'}
+              </button>
+            )}
+            {loadingAudio && (
+              <div className="flex justify-center">
+                <div className="w-8 h-8 border-4 border-purple-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* UI Overlay - z-10 ensures HUD is above canvas */}
+      {/* HUD & overlays */}
       {gameState && hasStarted && (
         <div className="absolute inset-0 pointer-events-none z-10">
-          {/* HUD - Time Tracker */}
+          {/* Time */}
           <div className="absolute top-8 left-8 bg-black/30 backdrop-blur-sm px-6 py-3 rounded-lg border border-purple-500/30 pointer-events-none">
             <div className="text-white font-mono">
               <div className="text-sm text-purple-300">Time</div>
@@ -195,6 +308,16 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
               </div>
             </div>
           </div>
+
+          {/* Beat sync indicator */}
+          {audioLoaded && (
+            <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-pink-500/30 pointer-events-none">
+              <div className="text-xs text-pink-300 font-mono flex items-center gap-2">
+                <span className="inline-block w-2 h-2 bg-pink-400 rounded-full animate-pulse" />
+                Beat Sync
+              </div>
+            </div>
+          )}
 
           {/* Controls */}
           <div className="absolute bottom-8 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-purple-500/30 pointer-events-none">
@@ -209,12 +332,8 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
           {showExtractModal && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto z-20">
               <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50 max-w-md">
-                <h2 className="text-2xl font-bold text-white mb-4 text-center">
-                  Confirm Extract
-                </h2>
-                <p className="text-purple-200 text-center mb-6">
-                  Cash out now with your current time? Your run will end.
-                </p>
+                <h2 className="text-2xl font-bold text-white mb-4 text-center">Confirm Extract</h2>
+                <p className="text-purple-200 text-center mb-6">Cash out now with your current time? Your run will end.</p>
                 <div className="flex gap-4">
                   <button
                     onClick={handleExtractConfirm}
@@ -233,7 +352,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </div>
           )}
 
-          {/* Extracted success screen */}
+          {/* Extracted success */}
           {hasExtracted && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
               <div className="bg-gradient-to-br from-purple-900/90 to-green-900/90 p-12 rounded-2xl border-2 border-green-500 shadow-2xl shadow-green-500/50">
@@ -242,21 +361,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                 </h2>
                 <div className="text-center mb-8">
                   <div className="text-lg text-purple-300 mb-2">Time Cashed Out</div>
-                  <div className="text-6xl font-bold text-white">
-                    {formatSessionTime(gameState.elapsedTime)}
-                  </div>
+                  <div className="text-6xl font-bold text-white">{formatSessionTime(gameState.elapsedTime)}</div>
                 </div>
                 <div className="flex flex-col gap-3">
-                  <button
-                    onClick={handleRestart}
-                    className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg"
-                  >
+                  <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg">
                     Play Again
                   </button>
-                  <Link
-                    href="/"
-                    className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white hover:shadow-lg hover:shadow-purple-500/25"
-                  >
+                  <Link href="/" className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white hover:shadow-lg hover:shadow-purple-500/25">
                     Back to Homepage
                   </Link>
                 </div>
@@ -264,7 +375,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </div>
           )}
 
-          {/* Game Over Screen - pointer-events-auto so button is clickable */}
+          {/* Game Over */}
           {isGameOver && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
               <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50">
@@ -273,21 +384,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                 </h2>
                 <div className="text-center mb-8">
                   <div className="text-lg text-purple-300 mb-2">Time Survived</div>
-                  <div className="text-6xl font-bold text-white">
-                    {formatSessionTime(gameState.elapsedTime)}
-                  </div>
+                  <div className="text-6xl font-bold text-white">{formatSessionTime(gameState.elapsedTime)}</div>
                 </div>
                 <div className="flex flex-col gap-3">
-                  <button
-                    onClick={handleRestart}
-                    className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50"
-                  >
+                  <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50">
                     Try Again
                   </button>
-                  <Link
-                    href="/"
-                    className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white hover:shadow-lg hover:shadow-purple-500/25"
-                  >
+                  <Link href="/" className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white hover:shadow-lg hover:shadow-purple-500/25">
                     Back to Homepage
                   </Link>
                 </div>

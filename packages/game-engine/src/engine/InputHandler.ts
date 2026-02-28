@@ -16,6 +16,7 @@ export class InputHandler {
     // Map keyboard keys to input actions
     this.keyMap = new Map([
       [' ', 'jump'], // Space bar
+      ['Space', 'jump'], // Space (some browsers)
       ['ArrowUp', 'jump'], // Up arrow
       ['w', 'jump'], // W key
       ['W', 'jump'],

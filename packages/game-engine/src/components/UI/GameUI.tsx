@@ -167,7 +167,7 @@ export const GameUI: React.FC<GameUIProps> = ({
                   Distance
                 </div>
                 <div className="text-white text-2xl font-bold">
-                  {Math.floor(gameState.cameraOffset / 10)}m
+                  {Math.floor((gameState.elapsedTime ?? 0) * 30)}m
                 </div>
               </div>
               <div className="bg-pink-900/30 backdrop-blur-sm rounded-lg p-4 border border-pink-400/20">

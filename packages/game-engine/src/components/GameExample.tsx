@@ -79,6 +79,7 @@ const createInitialGameState = (): GameState => {
     isPaused: false,
     isGameOver: false,
     score: 0,
+    elapsedTime: 0,
   };
 };
 

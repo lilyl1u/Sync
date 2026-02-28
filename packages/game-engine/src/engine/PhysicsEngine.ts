@@ -8,8 +8,8 @@ export class PhysicsEngine {
   constructor(config?: Partial<PhysicsConfig>) {
     // Default physics configuration (tuned for Geometry Dash-like gameplay)
     this.config = {
-      gravity: 2800, // pixels per second squared (increased for snappier feel)
-      jumpForce: -750, // negative = upward (increased to match gravity)
+      gravity: 2800, // pixels per second squared
+      jumpForce: -680, // Fixed height - any tap clears 1 block (50px)
       maxVelocity: { x: 400, y: 1200 }, // pixels per second
       friction: 0.8,
       ...config,
@@ -55,8 +55,7 @@ export class PhysicsEngine {
   }
 
   /**
-   * Make the player jump
-   * @param player The player object
+   * Make the player jump - fixed height, any tap (even 0.1ms) clears 1 block (50px)
    */
   jump(player: Player): void {
     if (player.isOnGround && !player.isJumping) {
@@ -80,8 +79,14 @@ export class PhysicsEngine {
    * @param player The player object
    * @param platforms List of platform objects
    * @param deltaTime Time elapsed since last update (in seconds)
+   * @param floorY Optional - ground surface Y (player bottom clamped to never go below this)
    */
-  updatePlayer(player: Player, platforms: GameObject[], deltaTime: number): void {
+  updatePlayer(
+    player: Player,
+    platforms: GameObject[],
+    deltaTime: number,
+    floorY?: number
+  ): void {
     // Apply gravity
     this.applyGravity(player, deltaTime);
 
@@ -102,21 +107,59 @@ export class PhysicsEngine {
       }
     }
 
-    // Check ground collision
-    const wasOnGround = player.isOnGround;
-    player.isOnGround = CollisionDetection.isOnGround(player, platforms, 5);
+    // Prevent falling through floors - resolve penetration when player has dropped into a platform
+    if (player.velocity.y >= 0) {
+      const playerBottom = player.position.y + player.size.y;
+      // Sort by platform top (ascending) so we snap to the highest platform we've penetrated
+      const sortedPlatforms = [...platforms].sort(
+        (a, b) => a.position.y - b.position.y
+      );
+      for (const platform of sortedPlatforms) {
+        if (!platform.active) continue;
 
-    if (player.isOnGround) {
-      // Snap to platform
-      const groundPlatform = this.findGroundPlatform(player, platforms);
-      if (groundPlatform) {
-        player.position.y = groundPlatform.position.y - player.size.y;
-        player.velocity.y = 0;
+        const platformTop = platform.position.y;
+        const horizontalOverlap =
+          player.position.x + player.size.x > platform.position.x &&
+          player.position.x < platform.position.x + platform.size.x;
+
+        // Player has fallen into/through the platform (bottom penetrated past top)
+        if (horizontalOverlap && playerBottom > platformTop) {
+          player.position.y = platformTop - player.size.y;
+          player.velocity.y = 0;
+          break; // Resolve one platform per frame
+        }
+      }
+    }
+
+    // Check ground collision only when falling/stationary — never when rising,
+    // otherwise the tolerance window snaps the player back down mid-jump.
+    if (player.velocity.y >= 0) {
+      const wasOnGround = player.isOnGround;
+      player.isOnGround = CollisionDetection.isOnGround(player, platforms, 12);
+
+      if (player.isOnGround) {
+        const groundPlatform = this.findGroundPlatform(player, platforms);
+        if (groundPlatform) {
+          player.position.y = groundPlatform.position.y - player.size.y;
+          player.velocity.y = 0;
+          player.isJumping = false;
+        }
+      } else if (wasOnGround && !player.isOnGround) {
         player.isJumping = false;
       }
-    } else if (wasOnGround && !player.isOnGround) {
-      // Just left the ground (falling)
-      player.isJumping = false;
+    } else {
+      player.isOnGround = false;
+    }
+
+    // Hard floor clamp - keep player above floor at all times (failsafe)
+    if (floorY !== undefined) {
+      const playerBottom = player.position.y + player.size.y;
+      if (playerBottom > floorY) {
+        player.position.y = floorY - player.size.y;
+        player.velocity.y = 0;
+        player.isOnGround = true;
+        player.isJumping = false;
+      }
     }
 
     // Apply friction to horizontal movement (optional)
@@ -140,7 +183,7 @@ export class PhysicsEngine {
         player.position.x + player.size.x > platform.position.x &&
         player.position.x < platform.position.x + platform.size.x;
 
-      if (horizontalOverlap && Math.abs(bottomY - platformTop) <= 5) {
+      if (horizontalOverlap && Math.abs(bottomY - platformTop) <= 12) {
         return platform;
       }
     }
@@ -157,8 +200,21 @@ export class PhysicsEngine {
   handlePlayerCollision(player: Player, collidedObject: GameObject): boolean {
     switch (collidedObject.type) {
       case GameObjectType.OBSTACLE_SPIKE:
+        player.health = 0;
+        return true;
+
       case GameObjectType.OBSTACLE_BLOCK:
-        // Fatal collision - game ends
+        // Landing on top of a block is safe - treat like a platform
+        const playerBottom = player.position.y + player.size.y;
+        const blockTop = collidedObject.position.y;
+        const landingTolerance = 18; // Forgiving window for landing
+        const isLandingOnTop =
+          playerBottom >= blockTop - 4 &&
+          playerBottom <= blockTop + landingTolerance &&
+          player.velocity.y >= -150; // Falling or just landed (allow slight upward at peak)
+        if (isLandingOnTop) {
+          return false; // Not fatal - physics will snap player on top
+        }
         player.health = 0;
         return true;
 

@@ -45,6 +45,9 @@ export type { MLModelInterface, MLModelOutput, TrainingExample } from './LevelGe
 // ============================================================================
 
 export { createTestLevel } from './TestLevel';
+export { createInfiniteLevel, generateInfiniteChunk } from './InfiniteLevel';
+export { createBeatLevel } from './BeatLevel';
+export type { BeatLevelConfig } from './BeatLevel';
 
 // ============================================================================
 // PROCEDURAL GENERATION

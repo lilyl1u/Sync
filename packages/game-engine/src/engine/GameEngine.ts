@@ -3,6 +3,7 @@ import { GameState, Player, GameObject, GameObjectType, Level, PhysicsConfig } f
 import { PhysicsEngine } from './PhysicsEngine';
 import { CollisionDetection } from './CollisionDetection';
 import { InputHandler } from './InputHandler';
+import { generateInfiniteChunk } from '../levels/InfiniteLevel';
 
 export interface GameEngineConfig {
   canvasWidth: number;
@@ -21,6 +22,12 @@ export class GameEngine {
   private lastFrameTime: number = 0;
   private isRunning: boolean = false;
 
+  // Infinite generation state
+  private generatedUpToX: number = 0;
+  private chunkSeed: number = 1;
+  private static readonly CHUNK_SIZE = 800;
+  private static readonly GENERATE_AHEAD = 3200; // Generate 3200px ahead of camera
+
   // Callbacks for rendering and events
   private onRenderCallback?: (state: GameState) => void;
   private onGameOverCallback?: (score: number) => void;
@@ -33,6 +40,13 @@ export class GameEngine {
 
     // Initialize game state
     this.gameState = this.createInitialState(initialLevel);
+
+    // Track how far hand-placed content extends so procedural gen starts after it
+    const maxObjX = initialLevel.segments.reduce((max, seg) => {
+      const segMax = seg.objects.reduce((m, obj) => Math.max(m, obj.position.x + (obj.size?.x ?? 0)), 0);
+      return Math.max(max, segMax);
+    }, 0);
+    this.generatedUpToX = maxObjX + 200;
   }
 
   /**
@@ -61,6 +75,7 @@ export class GameEngine {
       isPaused: false,
       isGameOver: false,
       score: 0,
+      elapsedTime: 0,
     };
   }
 
@@ -131,20 +146,54 @@ export class GameEngine {
   /**
    * Update game state
    */
+  /** Ground surface Y - player bottom must never go below this. Matches level design. */
+  private static readonly GROUND_Y = 500;
+
   private update(deltaTime: number): void {
     if (this.gameState.isGameOver) return;
+
+    // CRITICAL: Floor clamp FIRST - fix any bad state from previous frame immediately
+    const player = this.gameState.player;
+    const playerBottom = player.position.y + player.size.y;
+    if (playerBottom > GameEngine.GROUND_Y) {
+      player.position.y = GameEngine.GROUND_Y - player.size.y;
+      player.velocity.y = 0;
+      player.isOnGround = true;
+      player.isJumping = false;
+    }
 
     // Handle input
     this.handleInput();
 
     if (this.gameState.isPaused) return;
 
-    // Update player physics
-    const platforms = this.gameState.gameObjects.filter(
-      (obj) => obj.type === GameObjectType.PLATFORM && obj.active
+    this.gameState.elapsedTime += deltaTime;
+
+    // Update player physics - include OBSTACLE_BLOCK so player can land on top of blocks
+    const levelPlatforms = this.gameState.gameObjects.filter(
+      (obj) =>
+        (obj.type === GameObjectType.PLATFORM || obj.type === GameObjectType.OBSTACLE_BLOCK) &&
+        obj.active
     );
 
-    this.physicsEngine.updatePlayer(this.gameState.player, platforms, deltaTime);
+    // Permanent safety floor - prevents falling through (never unloaded, spans entire level)
+    const safetyFloor: GameObject = {
+      id: '__safety_floor__',
+      position: { x: -5000, y: GameEngine.GROUND_Y },
+      velocity: { x: 0, y: 0 },
+      size: { x: 20000, y: 50 },
+      type: GameObjectType.PLATFORM,
+      active: true,
+    };
+    const platforms = [safetyFloor, ...levelPlatforms];
+
+    // floorY = ground surface - player bottom clamped to never go below this
+    this.physicsEngine.updatePlayer(
+      this.gameState.player,
+      platforms,
+      deltaTime,
+      GameEngine.GROUND_Y
+    );
 
     // Maintain player's forward speed
     this.physicsEngine.setPlayerRunSpeed(this.gameState.player, this.config.playerSpeed);
@@ -158,12 +207,18 @@ export class GameEngine {
     // Check collisions
     this.checkCollisions();
 
-    // Check if player fell out of bounds
+    // Check out of bounds - only die from going off left or above; never from falling
+    // Final floor clamp (belt and suspenders)
+    if (player.position.y + player.size.y > GameEngine.GROUND_Y) {
+      player.position.y = GameEngine.GROUND_Y - player.size.y;
+      player.velocity.y = 0;
+      player.isOnGround = true;
+      player.isJumping = false;
+    }
+    // Only trigger game over for left/above bounds, not falling
     if (
-      this.physicsEngine.isOutOfBounds(this.gameState.player, {
-        width: this.config.canvasWidth,
-        height: this.config.canvasHeight,
-      })
+      player.position.x + player.size.x < 0 ||
+      player.position.y + player.size.y < 0
     ) {
       this.handleGameOver();
     }
@@ -218,13 +273,14 @@ export class GameEngine {
     const loadDistance = this.config.canvasWidth * 2;
     const unloadDistance = -this.config.canvasWidth;
 
-    // Remove objects that are too far behind
+    // Remove objects that are too far behind (never unload floor/platforms - prevents fall-through)
     this.gameState.gameObjects = this.gameState.gameObjects.filter((obj) => {
+      if (obj.type === GameObjectType.PLATFORM) return true;
       const relativeX = obj.position.x - this.gameState.cameraOffset;
       return relativeX > unloadDistance;
     });
 
-    // Load new objects ahead
+    // Load new objects ahead from pre-defined level segments
     const existingIds = new Set(this.gameState.gameObjects.map((obj) => obj.id));
     const newObjects = this.loadVisibleObjects(
       this.gameState.currentLevel,
@@ -232,6 +288,19 @@ export class GameEngine {
     ).filter((obj) => !existingIds.has(obj.id));
 
     this.gameState.gameObjects.push(...newObjects);
+
+    // Infinite procedural generation: create new chunks when player approaches
+    // the frontier of generated content
+    const horizonX = this.gameState.cameraOffset + GameEngine.GENERATE_AHEAD;
+    while (this.generatedUpToX < horizonX) {
+      const chunkObstacles = generateInfiniteChunk(
+        this.generatedUpToX,
+        GameEngine.CHUNK_SIZE,
+        this.chunkSeed++
+      );
+      this.gameState.gameObjects.push(...chunkObstacles);
+      this.generatedUpToX += GameEngine.CHUNK_SIZE;
+    }
   }
 
   /**
@@ -270,6 +339,15 @@ export class GameEngine {
   restart(): void {
     this.gameState = this.createInitialState(this.gameState.currentLevel);
     this.inputHandler.reset();
+
+    // Reset infinite generation so procedural content starts fresh
+    const level = this.gameState.currentLevel;
+    const maxObjX = level.segments.reduce((max, seg) => {
+      const segMax = seg.objects.reduce((m, obj) => Math.max(m, obj.position.x + (obj.size?.x ?? 0)), 0);
+      return Math.max(max, segMax);
+    }, 0);
+    this.generatedUpToX = maxObjX + 200;
+    this.chunkSeed = 1;
   }
 
   /**
