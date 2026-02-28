@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg");
+declare_id!("FAdRVYXxpjaacwU1MNcNf9yayhkCNJdyRyoJNcMKbrnB");
 
 #[program]
 pub mod gambling {
@@ -72,32 +72,38 @@ pub mod gambling {
         Ok(())
     }
 
-    /// Player extracts while alive; payout scales with survival time.
-    /// Session is closed after extracting.
-    pub fn extract(ctx: Context<Extract>) -> Result<()> {
+    /// Player extracts while alive. Client sends the exact amount (lamports) to pull from the vault.
+    /// Program validates: 0 < amount <= max_payout (buy_in + max_elapsed * rate).
+    pub fn extract(ctx: Context<Extract>, amount: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let session = &mut ctx.accounts.session;
-        let elapsed_seconds = elapsed_seconds(session.last_claimed_at, now)?;
+        let pool = &ctx.accounts.pool;
 
-        let winnings = elapsed_seconds
-            .checked_mul(ctx.accounts.pool.payout_rate_base_units_per_second)
+        require!(amount > 0, GamblingError::InvalidAmount);
+
+        let max_elapsed = elapsed_seconds(session.last_claimed_at, now)?;
+        let max_winnings = max_elapsed
+            .checked_mul(pool.payout_rate_base_units_per_second)
             .ok_or(GamblingError::MathOverflow)?;
-        let total_payout = session
+        let max_payout = session
             .buy_in_paid
-            .checked_add(winnings)
+            .checked_add(max_winnings)
             .ok_or(GamblingError::MathOverflow)?;
+
+        require!(amount <= max_payout, GamblingError::PayoutExceedsAllowed);
 
         transfer_from_vault(
             &ctx.accounts.vault.to_account_info(),
             &ctx.accounts.player.to_account_info(),
-            total_payout,
+            amount,
         )?;
 
         let pool = &mut ctx.accounts.pool;
-        pool.total_payouts = pool.total_payouts.saturating_add(total_payout);
+        pool.total_payouts = pool.total_payouts.saturating_add(amount);
         session.last_claimed_at = now;
         Ok(())
     }
+
 
     /// Player died; session is closed and buy-in is forfeited.
     pub fn record_death(_ctx: Context<RecordDeath>) -> Result<()> {
@@ -277,6 +283,8 @@ pub struct Session {
 pub enum GamblingError {
     #[msg("Invalid amount")]
     InvalidAmount,
+    #[msg("Payout exceeds allowed (buy-in + max elapsed * rate)")]
+    PayoutExceedsAllowed,
     #[msg("Unauthorized player")]
     UnauthorizedPlayer,
     #[msg("Invalid session pool")]

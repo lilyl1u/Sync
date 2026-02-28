@@ -1,5 +1,5 @@
 {
-  "address": "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg",
+  "address": "FAdRVYXxpjaacwU1MNcNf9yayhkCNJdyRyoJNcMKbrnB",
   "metadata": {
     "name": "gambling",
     "version": "0.1.0",
@@ -10,8 +10,8 @@
     {
       "name": "extract",
       "docs": [
-        "Player extracts while alive; payout scales with survival time.",
-        "Session is closed after extracting."
+        "Player extracts while alive. Client sends the exact amount (lamports) to pull from the vault.",
+        "Program validates: 0 < amount <= max_payout (buy_in + max_elapsed * rate)."
       ],
       "discriminator": [
         39,
@@ -102,7 +102,12 @@
           "signer": true
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "fund_pool",
@@ -508,26 +513,31 @@
     },
     {
       "code": 6001,
+      "name": "PayoutExceedsAllowed",
+      "msg": "Payout exceeds allowed (buy-in + max elapsed * rate)"
+    },
+    {
+      "code": 6002,
       "name": "UnauthorizedPlayer",
       "msg": "Unauthorized player"
     },
     {
-      "code": 6002,
+      "code": 6003,
       "name": "InvalidSessionPool",
       "msg": "Invalid session pool"
     },
     {
-      "code": 6003,
+      "code": 6004,
       "name": "MathOverflow",
       "msg": "Math overflow"
     },
     {
-      "code": 6004,
+      "code": 6005,
       "name": "ClockMovedBackwards",
       "msg": "Clock moved backwards"
     },
     {
-      "code": 6005,
+      "code": 6006,
       "name": "VaultInsufficientBalance",
       "msg": "Vault has insufficient balance"
     }

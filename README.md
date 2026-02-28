@@ -1,6 +1,6 @@
 # Geometry Dash Monorepo
 
-A comprehensive monorepo for a Geometry Dash clone with Solana gambling integration and ML-powered music genre prediction.
+A comprehensive monorepo for a Geometry Dash clone with Solana gambling integration.
 
 ## Project Structure
 
@@ -81,8 +81,43 @@ sync/
 
 - Node.js 20+
 - npm or yarn
-- Rust & Anchor (for Solana development)
-- Solana CLI
+- **For Solana integration:** Rust, Solana CLI, and Anchor CLI 0.32.1
+
+### Solana / Anchor Setup
+
+The Solana gambling package (`packages/solana`) requires the Anchor CLI to build and deploy programs. Run the setup script from the repo root:
+
+```bash
+npm run setup:anchor
+```
+
+This installs (if missing):
+
+- **Rust** (via rustup)
+- **Solana CLI** (stable)
+- **AVM** (Anchor Version Manager)
+- **Anchor CLI 0.32.1** (matches `packages/solana/Anchor.toml`)
+
+After setup, restart your terminal, then:
+
+```bash
+# Generate a wallet (if needed)
+solana-keygen new
+
+# Use devnet for development
+solana config set --url devnet
+
+# Airdrop devnet SOL
+solana airdrop 2
+
+# Build Solana programs
+cd packages/solana && anchor build
+
+# Run Solana tests
+anchor test
+```
+
+**Alternative (all-in-one):** On Mac/Linux, you can instead run the [official Solana install script](https://www.anchor-lang.com/docs/installation), which installs Rust, Solana CLI, Anchor CLI, Node.js, and Yarn. Then ensure Anchor 0.32.1 is active: `avm install 0.32.1 && avm use 0.32.1`.
 
 ### Installation
 

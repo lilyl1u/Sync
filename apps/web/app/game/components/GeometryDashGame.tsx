@@ -9,19 +9,16 @@ import {
   createBeatLevel,
   GameState,
 } from '@geometrydash/game-engine';
-import { Connection, type PublicKey, type Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, type Transaction } from '@solana/web3.js';
 import {
-  estimatePayoutBaseUnits,
+  estimateEarnedBaseUnits,
   extractOnChain,
+  fetchPoolConfig,
   recordDeathOnChain,
   startSessionOnChain,
+  type PoolConfig,
 } from '@/lib/gamblingClient';
-import {
-  BUYIN_BASE_UNITS,
-  GAMBLING_PROGRAM_ID,
-  PAYOUT_RATE_BASE_UNITS_PER_SECOND,
-  RPC_URL,
-} from '@/lib/solana';
+import { RPC_URL } from '@/lib/solana';
 
 import { detectBeats, DetectedBeat } from '../utils/beatDetector';
 
@@ -65,9 +62,31 @@ function getPhantomProvider(): PhantomProvider | null {
 }
 
 function formatSessionTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
+  const s = typeof seconds === 'number' && !Number.isNaN(seconds) ? Math.max(0, seconds) : 0;
+  const mins = Math.floor(s / 60);
+  const secs = Math.floor(s % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function getElapsedSeconds(state: GameState | null): number {
+  if (!state) return 0;
+  return (state as GameState & { elapsedTime?: number }).elapsedTime ?? 0;
+}
+
+const LAMPORTS_PER_SOL = 1e9;
+
+function formatSol(baseUnits: bigint): string {
+  const sol = Number(baseUnits) / LAMPORTS_PER_SOL;
+  if (sol >= 1) return sol.toFixed(2);
+  if (sol >= 0.01) return sol.toFixed(4);
+  return sol.toFixed(6);
+}
+
+function formatSolBalance(lamports: number): string {
+  const sol = lamports / LAMPORTS_PER_SOL;
+  if (sol >= 1) return sol.toFixed(2);
+  if (sol >= 0.01) return sol.toFixed(4);
+  return sol.toFixed(6);
 }
 
 const E_HOLD_DURATION_MS = 3000;
@@ -97,9 +116,8 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const eHoldStartRef = useRef<number | null>(null);
   const eHoldRafRef = useRef<number | null>(null);
   const eHoldTriggeredRef = useRef(false);
+  const frozenEarnedRef = useRef<bigint | null>(null);
 
-
-  // Audio refs (not state — we don't want re-renders on audio changes)
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
@@ -119,17 +137,20 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const [isSettling, setIsSettling] = useState(false);
   const [buyInSignature, setBuyInSignature] = useState<string | null>(null);
   const [settleSignature, setSettleSignature] = useState<string | null>(null);
-  const [lastPayoutBaseUnits, setLastPayoutBaseUnits] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [extractHoldProgress, setExtractHoldProgress] = useState(0);
+  const [walletBalanceLamports, setWalletBalanceLamports] = useState<number | null>(null);
+  const [displayElapsedFallback, setDisplayElapsedFallback] = useState(0);
+  const [poolConfig, setPoolConfig] = useState<PoolConfig | null>(null);
+  const [frozenEarned, setFrozenEarned] = useState<bigint | null>(null);
+  const sessionStartRef = useRef<number | null>(null);
 
   // ------------------------------------------------------------------
   // Load & analyse audio on mount, then build the level
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!canvasRef.current) return;
-
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -143,7 +164,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       let level;
 
       try {
-        // Fetch and decode
         const response = await fetch(AUDIO_URL);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const arrayBuffer = await response.arrayBuffer();
@@ -156,11 +176,9 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
         if (cancelled) return;
 
-        // Detect beats
         const beats = await detectBeats(audioBuffer);
         beatsRef.current = beats;
 
-        // Build beat-synced level
         level = createBeatLevel({
           beats: beats.map((b) => b.time),
           playerSpeed: PLAYER_SPEED,
@@ -169,7 +187,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
         setAudioLoaded(true);
       } catch {
-        // No audio file found — fall back to infinite procedural level
         level = createInfiniteLevel();
         setAudioError(true);
       } finally {
@@ -198,6 +215,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       cancelled = true;
       engineRef.current?.destroy();
       engineRef.current = null;
+      rendererRef.current = null;
       stopAudio();
       if (audioCtxRef.current?.state !== 'closed') {
         audioCtxRef.current?.close();
@@ -215,7 +233,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     const buffer = audioBufferRef.current;
     if (!audioCtx || !buffer) return;
 
-    // Stop any existing source
     try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
 
     const source = audioCtx.createBufferSource();
@@ -243,7 +260,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   }, []);
 
   // ------------------------------------------------------------------
-  // Poll engine state for HUD updates
+  // Poll engine state for UI
   // ------------------------------------------------------------------
   useEffect(() => {
     let rafId: number;
@@ -256,78 +273,91 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     return () => cancelAnimationFrame(rafId);
   }, []);
 
+  // Fallback timer – stops when frozen
+  useEffect(() => {
+    if (!hasStarted || isGameOver || hasExtracted) {
+      sessionStartRef.current = null;
+      return;
+    }
+    sessionStartRef.current = performance.now() / 1000;
+    const interval = setInterval(() => {
+      if (frozenEarnedRef.current !== null) return;
+      const start = sessionStartRef.current;
+      if (start !== null) {
+        setDisplayElapsedFallback(performance.now() / 1000 - start);
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, [hasStarted, isGameOver, hasExtracted]);
+
+  // Fetch wallet balance
+  useEffect(() => {
+    if (!walletAddress) { setWalletBalanceLamports(null); return; }
+    if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+    const conn = connectionRef.current;
+    const pubkey = new PublicKey(walletAddress);
+    const fetchBalance = async () => {
+      try { setWalletBalanceLamports(await conn.getBalance(pubkey)); }
+      catch { setWalletBalanceLamports(null); }
+    };
+    void fetchBalance();
+    const pollInterval = hasStarted && !hasExtracted && !isGameOver ? 3000 : 10000;
+    const interval = setInterval(fetchBalance, pollInterval);
+    return () => clearInterval(interval);
+  }, [walletAddress, hasStarted, hasExtracted, isGameOver]);
+
   // ------------------------------------------------------------------
   // Game lifecycle callbacks
   // ------------------------------------------------------------------
   const connectWallet = useCallback(async (): Promise<PhantomProvider> => {
     const provider = getPhantomProvider();
-    if (!provider) {
-      throw new Error('Phantom wallet not found. Install Phantom and try again.');
-    }
-
+    if (!provider) throw new Error('Phantom wallet not found. Install Phantom and try again.');
     setIsWalletConnecting(true);
+    setErrorMessage(null);
+    setStatusMessage('Open Phantom to approve the connection...');
     try {
       const response = await withTimeout(
         provider.connect({ onlyIfTrusted: false }),
-        30000,
-        'Wallet connection timed out. Open Phantom and approve the connection request, then try again.',
+        60000,
+        'Wallet connection timed out.',
       );
       setWalletAddress(response.publicKey.toBase58());
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      setStatusMessage('Wallet connected. Click Pay Buy-In & Start to begin.');
       return provider;
+    } catch (err) {
+      setStatusMessage(null);
+      throw err;
     } finally {
       setIsWalletConnecting(false);
     }
   }, []);
 
-  const settleRun = useCallback(
-    async ({ durationSeconds, died }: { durationSeconds: number; died: boolean }): Promise<boolean> => {
-      if (hasSettledCurrentRunRef.current || !walletAddress) {
-        return true;
-      }
-
+  const doExtract = useCallback(
+    async (earned: bigint): Promise<boolean> => {
+      if (hasSettledCurrentRunRef.current || !walletAddress) return true;
       hasSettledCurrentRunRef.current = true;
       setIsSettling(true);
       setErrorMessage(null);
-      setStatusMessage(
-        died
-          ? 'Run ended. Recording death on-chain with 0 payout...'
-          : 'Extracting and claiming on-chain payout...',
-      );
+      setStatusMessage('Extracting – confirm in Phantom...');
 
       try {
         const walletProvider = getPhantomProvider();
-        if (!walletProvider || !walletProvider.publicKey) {
-          throw new Error('Wallet is not connected');
-        }
-        if (!connectionRef.current) {
-          connectionRef.current = new Connection(RPC_URL, 'confirmed');
-        }
+        if (!walletProvider?.publicKey) throw new Error('Wallet is not connected');
+        if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
 
-        const signature = died
-          ? await recordDeathOnChain({
-              connection: connectionRef.current,
-              wallet: walletProvider,
-            })
-          : await extractOnChain({
-              connection: connectionRef.current,
-              wallet: walletProvider,
-            });
-
-        const payout = died ? 0n : estimatePayoutBaseUnits(durationSeconds);
+        const signature = await extractOnChain({
+          connection: connectionRef.current,
+          wallet: walletProvider,
+          payoutBaseUnits: earned,
+        });
 
         setSettleSignature(signature);
-        setLastPayoutBaseUnits(payout.toString());
-        setStatusMessage(
-          died
-            ? 'Player died. Buy-in forfeited and payout is 0.'
-            : `Extract successful. Paid ${payout.toString()} base units.`,
-        );
-
+        setStatusMessage(`Extract successful.`);
         return true;
       } catch (error) {
         hasSettledCurrentRunRef.current = false;
-        const message = error instanceof Error ? error.message : 'Failed to settle payout';
-        setErrorMessage(message);
+        setErrorMessage(error instanceof Error ? error.message : 'Failed to extract');
         setStatusMessage(null);
         return false;
       } finally {
@@ -337,39 +367,40 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     [walletAddress],
   );
 
-  const handleStart = useCallback(async () => {
+  const handleConnectWallet = useCallback(async () => {
+    try { await connectWallet(); }
+    catch (error) { setErrorMessage(error instanceof Error ? error.message : 'Connection failed'); }
+  }, [connectWallet]);
+
+  const handlePayAndStart = useCallback(async () => {
     const engine = engineRef.current;
-    if (!engine || hasStarted) {
+    if (!engine || hasStarted || !walletAddress) return;
+    const provider = getPhantomProvider();
+    if (!provider?.publicKey) {
+      setErrorMessage('Wallet disconnected. Please connect again.');
+      setWalletAddress(null);
       return;
     }
-
     setErrorMessage(null);
-    setStatusMessage('Connecting wallet...');
-
+    setStatusMessage('Submitting on-chain start transaction...');
+    setIsPayingBuyIn(true);
     try {
-      const provider = await connectWallet();
-
-      if (!connectionRef.current) {
-        connectionRef.current = new Connection(RPC_URL, 'confirmed');
-      }
-
-      setStatusMessage('Submitting on-chain start transaction...');
-      setIsPayingBuyIn(true);
-
-      const signature = await startSessionOnChain({
-        connection: connectionRef.current,
-        wallet: provider,
-      });
-
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const signature = await startSessionOnChain({ connection: connectionRef.current, wallet: provider });
       setBuyInSignature(signature);
       setStatusMessage('Waiting for on-chain confirmation...');
       await connectionRef.current.confirmTransaction(signature, 'confirmed');
 
-      setLastPayoutBaseUnits(null);
-      setSettleSignature(null);
-      hasSettledCurrentRunRef.current = false;
+      const config = await fetchPoolConfig(connectionRef.current);
+      setPoolConfig(config);
 
-      setStatusMessage('Buy-in confirmed on-chain. Run started.');
+      setSettleSignature(null);
+      setFrozenEarned(null);
+      frozenEarnedRef.current = null;
+      hasSettledCurrentRunRef.current = false;
+      setDisplayElapsedFallback(0);
+
+      setStatusMessage('Buy-in confirmed. Run started.');
       engine.start();
       setHasStarted(true);
       setIsGameOver(false);
@@ -377,31 +408,37 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       gameContainerRef.current?.focus();
       if (audioLoaded) playAudio();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Buy-in failed';
-      setErrorMessage(message);
+      setErrorMessage(error instanceof Error ? error.message : 'Buy-in failed');
       setStatusMessage(null);
     } finally {
       setIsPayingBuyIn(false);
     }
-  }, [connectWallet, hasStarted]);
+  }, [hasStarted, walletAddress, audioLoaded, playAudio]);
+
+  const FEE_BUFFER_LAMPORTS = 300_000n;
 
   const triggerHoldExtract = useCallback(async () => {
     const engine = engineRef.current;
-    if (!engine || !hasStarted || isGameOver || hasExtracted || isSettling) {
-      return;
-    }
+    if (!engine || !hasStarted || isGameOver || hasExtracted || isSettling) return;
 
+    const secs = Math.max(getElapsedSeconds(engine.getState()), displayElapsedFallback);
+    const earned = estimateEarnedBaseUnits(secs, poolConfig ?? undefined);
+
+    const totalPayout = earned + FEE_BUFFER_LAMPORTS;
+    frozenEarnedRef.current = totalPayout;
     engine.pause();
-
-    const duration = engine.getState().elapsedTime;
-    const settled = await settleRun({ durationSeconds: duration, died: false });
-    if (settled) {
-      setHasExtracted(true);
-      return;
+    stopAudio();
+    setFrozenEarned(totalPayout);
+    setHasExtracted(true);
+    const ok = await doExtract(totalPayout);
+    if (!ok) {
+      frozenEarnedRef.current = null;
+      setFrozenEarned(null);
+      setHasExtracted(false);
+      engine.resume();
+      if (audioLoaded) resumeAudio();
     }
-
-    engine.resume();
-  }, [hasExtracted, hasStarted, isGameOver, isSettling, settleRun]);
+  }, [displayElapsedFallback, hasExtracted, hasStarted, isGameOver, isSettling, poolConfig, doExtract, stopAudio, audioLoaded, resumeAudio]);
 
   const cancelExtractHold = useCallback(() => {
     if (eHoldRafRef.current !== null) {
@@ -411,19 +448,10 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     eHoldStartRef.current = null;
     eHoldTriggeredRef.current = false;
     setExtractHoldProgress(0);
-  }, [audioLoaded, playAudio]);
+  }, []);
 
   const startExtractHold = useCallback(() => {
-    if (
-      eHoldStartRef.current !== null ||
-      !hasStarted ||
-      isGameOver ||
-      hasExtracted ||
-      isSettling
-    ) {
-      return;
-    }
-
+    if (eHoldStartRef.current !== null || !hasStarted || isGameOver || hasExtracted || isSettling) return;
     const start = performance.now();
     eHoldStartRef.current = start;
     eHoldTriggeredRef.current = false;
@@ -431,14 +459,10 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
     const tick = async (now: number) => {
       const holdStart = eHoldStartRef.current;
-      if (holdStart === null) {
-        return;
-      }
-
+      if (holdStart === null) return;
       const elapsed = now - holdStart;
       const progress = Math.min(1, elapsed / E_HOLD_DURATION_MS);
       setExtractHoldProgress(progress);
-
       if (progress >= 1 && !eHoldTriggeredRef.current) {
         eHoldTriggeredRef.current = true;
         eHoldStartRef.current = null;
@@ -447,53 +471,40 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         await triggerHoldExtract();
         return;
       }
-
-      eHoldRafRef.current = requestAnimationFrame((ts) => {
-        void tick(ts);
-      });
+      eHoldRafRef.current = requestAnimationFrame((ts) => { void tick(ts); });
     };
-
-    eHoldRafRef.current = requestAnimationFrame((ts) => {
-      void tick(ts);
-    });
+    eHoldRafRef.current = requestAnimationFrame((ts) => { void tick(ts); });
   }, [hasExtracted, hasStarted, isGameOver, isSettling, triggerHoldExtract]);
 
   const handleRestart = useCallback(() => {
     cancelExtractHold();
-    if (engineRef.current) {
-      stopAudio();
-      // Fully stop simulation until a new on-chain start is confirmed.
-      engineRef.current.stop();
-      engineRef.current.restart();
-      setGameState(engineRef.current.getState());
+    stopAudio();
+    frozenEarnedRef.current = null;
+    const engine = engineRef.current;
+    const renderer = rendererRef.current;
+    if (engine) {
+      engine.stop();
+      engine.restart();
+      const state = engine.getState();
+      setGameState(state);
+      if (renderer) renderer.render(state);
       setIsGameOver(false);
       setHasExtracted(false);
       setHasStarted(false);
       setBuyInSignature(null);
       setSettleSignature(null);
-      setLastPayoutBaseUnits(null);
+      setFrozenEarned(null);
+      setPoolConfig(null);
       setStatusMessage(null);
       setErrorMessage(null);
+      setDisplayElapsedFallback(0);
       hasSettledCurrentRunRef.current = false;
       gameContainerRef.current?.focus();
-      if (audioLoaded) playAudio();
     }
-  }, [cancelExtractHold]);
+  }, [cancelExtractHold, stopAudio]);
 
   useEffect(() => {
-    if (!isGameOver || !hasStarted) {
-      return;
-    }
-
-    cancelExtractHold();
-    const duration = engineRef.current?.getState().elapsedTime ?? 0;
-    void settleRun({ durationSeconds: duration, died: true });
-  }, [cancelExtractHold, hasStarted, isGameOver, settleRun]);
-
-  useEffect(() => {
-    if (hasExtracted) {
-      cancelExtractHold();
-    }
+    if (hasExtracted) cancelExtractHold();
   }, [cancelExtractHold, hasExtracted]);
 
   // ------------------------------------------------------------------
@@ -501,33 +512,38 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   // ------------------------------------------------------------------
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.key === 'r' || e.key === 'R') {
-        handleRestart();
-        return;
-      }
+      if (e.key === 'r' || e.key === 'R') { handleRestart(); return; }
       if (e.key === 'Enter' && !hasStarted && !loadingAudio) {
         e.preventDefault();
-        void handleStart();
+        if (walletAddress) void handlePayAndStart();
+        else void handleConnectWallet();
       }
       if ((e.key === 'e' || e.key === 'E') && !e.repeat && !loadingAudio) {
         e.preventDefault();
         startExtractHold();
       }
     };
-
     const handleKeyUp = (e: KeyboardEvent) => {
-      if ((e.key === 'e' || e.key === 'E') && !eHoldTriggeredRef.current) {
-        cancelExtractHold();
-      }
+      if ((e.key === 'e' || e.key === 'E') && !eHoldTriggeredRef.current) cancelExtractHold();
     };
-
     window.addEventListener('keydown', handleKeyPress);
     window.addEventListener('keyup', handleKeyUp);
     return () => {
       window.removeEventListener('keydown', handleKeyPress);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [cancelExtractHold, handleRestart, handleStart, hasExtracted, hasStarted, isGameOver, startExtractHold, loadingAudio]);
+  }, [cancelExtractHold, handleConnectWallet, handlePayAndStart, handleRestart, hasExtracted, hasStarted, isGameOver, startExtractHold, walletAddress, loadingAudio]);
+
+  // Compute the live earned value (only used while playing, NOT after extract)
+  const liveEarned: bigint | null = (gameState && hasStarted && !isGameOver && !hasExtracted)
+    ? estimateEarnedBaseUnits(
+        Math.max(getElapsedSeconds(gameState), displayElapsedFallback),
+        poolConfig ?? undefined,
+      )
+    : null;
+
+  const ratePerSec = poolConfig?.payoutRateBaseUnitsPerSecond
+    ?? BigInt(process.env.NEXT_PUBLIC_PAYOUT_RATE_BASE_UNITS_PER_SECOND ?? '100000');
 
   // ------------------------------------------------------------------
   // Render
@@ -539,12 +555,31 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       className="relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none"
       aria-label="Game"
     >
-      <canvas
-        ref={canvasRef}
-        width={width}
-        height={height}
-        className="border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
-      />
+      <div className="relative" style={{ width, height }}>
+        <canvas
+          ref={canvasRef}
+          width={width}
+          height={height}
+          className="border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
+        />
+        {gameState && liveEarned !== null && (
+          <div
+            className="absolute pointer-events-none font-mono text-sm font-bold text-emerald-400 drop-shadow-lg"
+            style={{
+              left: gameState.player.position.x - gameState.cameraOffset + gameState.player.size.x / 2,
+              top: gameState.player.position.y - 40,
+              transform: 'translate(-50%, 0)',
+            }}
+          >
+            <div className="bg-black/60 backdrop-blur-sm px-2 py-1 rounded border border-emerald-400/40 whitespace-nowrap">
+              +{formatSol(ratePerSec)} SOL/s
+            </div>
+            <div className="text-emerald-300/90 text-xs mt-0.5 bg-black/50 px-2 py-0.5 rounded">
+              Earned: {formatSol(liveEarned)} SOL
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Start / loading screen */}
       {!hasStarted && (
@@ -554,54 +589,59 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
               {loadingAudio ? 'Loading Audio...' : 'Ready to Play?'}
             </h2>
             <p className="text-purple-200 mb-3 max-w-md">
-              Start requires a buy-in on Solana devnet. Extract to cash out by survival time. Die and you lose the run balance.
+              Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.
             </p>
-            <p className="text-purple-300 mb-8 max-w-md font-mono text-sm">
-              Program: {GAMBLING_PROGRAM_ID.toBase58().slice(0, 4)}...{GAMBLING_PROGRAM_ID.toBase58().slice(-4)} | Buy-in: {BUYIN_BASE_UNITS.toString()} | Payout Rate: {PAYOUT_RATE_BASE_UNITS_PER_SECOND.toString()}/sec
-            </p>
-            <button
-              onClick={() => {
-                void handleStart();
-              }}
-              disabled={isWalletConnecting || isPayingBuyIn}
-              className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {isWalletConnecting
-                ? 'Connecting Wallet...'
-                : isPayingBuyIn
-                  ? 'Waiting for Payment...'
-                  : 'Pay Buy-In & Start'}
-            </button>
-            {statusMessage && (
-              <p className="mt-4 text-cyan-300 text-sm font-mono max-w-md break-words">
-                {statusMessage}
+            {walletBalanceLamports !== null && (
+              <p className="text-emerald-400 font-semibold mb-2 font-mono">
+                Wallet: {formatSolBalance(walletBalanceLamports)} SOL
               </p>
             )}
-            {errorMessage && (
-              <p className="mt-3 text-red-300 text-sm font-mono max-w-md break-words">
-                {errorMessage}
-              </p>
-            )}
+            <p className="text-purple-300 mb-6 max-w-md font-mono text-sm">
+              Rate: {formatSol(ratePerSec)} SOL/sec
+            </p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+              {!walletAddress ? (
+                <button
+                  onClick={() => void handleConnectWallet()}
+                  disabled={isWalletConnecting || loadingAudio}
+                  className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isWalletConnecting ? 'Connecting... (check Phantom)' : 'Connect Wallet'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => void handlePayAndStart()}
+                  disabled={isPayingBuyIn || loadingAudio}
+                  className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isPayingBuyIn ? 'Confirm in Phantom...' : 'Pay Buy-In & Start'}
+                </button>
+              )}
+            </div>
+            {statusMessage && <p className="mt-4 text-cyan-300 text-sm font-mono max-w-md break-words">{statusMessage}</p>}
+            {errorMessage && <p className="mt-3 text-red-300 text-sm font-mono max-w-md break-words">{errorMessage}</p>}
           </div>
         </div>
       )}
 
-      {/* HUD & overlays */}
+      {/* HUD overlay while playing */}
       {gameState && hasStarted && (
         <div className="absolute inset-0 pointer-events-none z-10">
-          {/* Time */}
-          <div className="absolute top-8 left-8 bg-black/30 backdrop-blur-sm px-6 py-3 rounded-lg border border-purple-500/30 pointer-events-none">
+          <div className="absolute top-8 left-8 bg-black/30 backdrop-blur-sm px-6 py-3 rounded-lg border border-purple-500/30">
             <div className="text-white font-mono">
               <div className="text-sm text-purple-300">Time</div>
               <div className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                {formatSessionTime(gameState.elapsedTime)}
+                {formatSessionTime(
+                  hasExtracted
+                    ? Math.max(getElapsedSeconds(gameState), displayElapsedFallback)
+                    : Math.max(getElapsedSeconds(gameState), displayElapsedFallback)
+                )}
               </div>
             </div>
           </div>
 
-          {/* Beat sync indicator */}
           {audioLoaded && (
-            <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-pink-500/30 pointer-events-none">
+            <div className="absolute top-24 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-pink-500/30">
               <div className="text-xs text-pink-300 font-mono flex items-center gap-2">
                 <span className="inline-block w-2 h-2 bg-pink-400 rounded-full animate-pulse" />
                 Beat Sync
@@ -612,29 +652,25 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
           <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-4 py-3 rounded-lg border border-purple-500/30 max-w-[30rem]">
             <div className="text-xs text-purple-200 font-mono space-y-1">
               <div>Wallet: {walletAddress ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}` : 'Not connected'}</div>
-              <div>Start Tx: {buyInSignature ? `${buyInSignature.slice(0, 8)}...` : 'Pending'}</div>
-              <div>Settle Tx: {settleSignature ? `${settleSignature.slice(0, 8)}...` : 'Not settled'}</div>
-              <div>Payout: {lastPayoutBaseUnits ?? '0'} base units</div>
+              {walletBalanceLamports !== null && (
+                <div className="text-emerald-400 font-semibold">Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
+              )}
               {statusMessage && <div className="text-cyan-300">{statusMessage}</div>}
               {errorMessage && <div className="text-red-300">{errorMessage}</div>}
             </div>
           </div>
 
-          {/* Controls */}
-          <div className="absolute bottom-8 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-purple-500/30 pointer-events-none">
+          <div className="absolute bottom-8 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-purple-500/30">
             <div className="text-xs text-purple-300 font-mono space-y-1">
               <div>SPACE / CLICK - Jump</div>
-              <div>ENTER - Start Run</div>
-              <div>HOLD E (3s) - Instant Extract</div>
-              <div>R - Restart (new buy-in)</div>
+              <div>HOLD E (3s) - Extract</div>
+              <div>R - Restart</div>
             </div>
           </div>
 
           {extractHoldProgress > 0 && !hasExtracted && !isGameOver && (
             <div className="absolute bottom-8 right-8 bg-black/60 backdrop-blur-sm px-4 py-3 rounded-lg border border-emerald-400/40 w-72">
-              <div className="text-xs text-emerald-300 font-mono mb-2">
-                Hold E to extract
-              </div>
+              <div className="text-xs text-emerald-300 font-mono mb-2">Hold E to extract</div>
               <div className="w-full h-2 bg-black/70 rounded overflow-hidden border border-emerald-400/30">
                 <div
                   className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-[width] duration-75"
@@ -644,17 +680,19 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </div>
           )}
 
-          {/* Extracted success */}
-          {hasExtracted && (
+          {hasExtracted && frozenEarned !== null && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
               <div className="bg-gradient-to-br from-purple-900/90 to-green-900/90 p-12 rounded-2xl border-2 border-green-500 shadow-2xl shadow-green-500/50">
-                <h2 className="text-5xl font-bold text-white mb-4 text-center bg-gradient-to-r from-green-300 to-cyan-300 bg-clip-text text-transparent">
-                  EXTRACTED!
+                <h2 className="text-5xl font-bold text-white mb-6 text-center bg-gradient-to-r from-green-300 to-cyan-300 bg-clip-text text-transparent">
+                  Congrats!
                 </h2>
                 <div className="text-center mb-8">
-                  <div className="text-lg text-purple-300 mb-2">Time Cashed Out</div>
-                  <div className="text-6xl font-bold text-white">{formatSessionTime(gameState.elapsedTime)}</div>
-                  <div className="text-purple-200 mt-3 font-mono">Payout: {lastPayoutBaseUnits ?? '0'} base units</div>
+                  <div className="text-emerald-300 font-bold text-4xl mb-2">
+                    You earned {formatSol(frozenEarned)} SOL
+                  </div>
+                  <div className="text-purple-200/80 text-sm">
+                    Confirm in Phantom to receive this amount.
+                  </div>
                 </div>
                 <div className="flex flex-col gap-3">
                   <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg">
@@ -668,7 +706,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </div>
           )}
 
-          {/* Game Over */}
           {isGameOver && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
               <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50">
@@ -677,8 +714,8 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                 </h2>
                 <div className="text-center mb-8">
                   <div className="text-lg text-purple-300 mb-2">Time Survived</div>
-                  <div className="text-6xl font-bold text-white">{formatSessionTime(gameState.elapsedTime)}</div>
-                  <div className="text-red-300 mt-3 font-mono">Player died. Payout is 0 and buy-in is forfeited.</div>
+                  <div className="text-6xl font-bold text-white">{formatSessionTime(getElapsedSeconds(gameState))}</div>
+                  <div className="text-red-300 mt-3 font-mono">You died. Payout is 0.</div>
                 </div>
                 <div className="flex flex-col gap-3">
                   <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50">
@@ -694,7 +731,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
           {isSettling && (
             <div className="absolute bottom-8 right-8 bg-black/60 px-4 py-2 rounded-lg border border-cyan-400/40 text-cyan-200 font-mono text-sm">
-              Settling run on devnet...
+              Settling on devnet...
             </div>
           )}
         </div>

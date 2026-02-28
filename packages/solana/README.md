@@ -172,6 +172,35 @@ function GameComponent() {
 }
 ```
 
+## Setup (Anchor, no house keypair)
+
+Uses your default Solana wallet (`~/.config/solana/id.json` or `ANCHOR_WALLET`). No separate house keypair.
+
+```bash
+# From repo root. Prerequisites: Anchor CLI, Solana CLI, ~2 SOL on devnet.
+solana config set --url devnet
+solana airdrop 2   # if needed
+npm run setup:gambling
+```
+
+This will: deploy the program, initialize the pool, fund it, and update `apps/web/.env.local`.
+
+### Upgrade existing program
+
+```bash
+npm run deploy:gambling
+```
+
+Your wallet must be the program's upgrade authority.
+
+### Pool management
+
+```bash
+cd packages/solana
+npm run pool:init    # Initialize pool (uses ANCHOR_WALLET as authority)
+npm run pool:fund -- 200000000   # Fund vault with 0.2 SOL
+```
+
 ## Development
 
 ### Build Program
