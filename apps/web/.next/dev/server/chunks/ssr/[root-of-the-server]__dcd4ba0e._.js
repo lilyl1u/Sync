@@ -30,10 +30,6 @@ Object.defineProperty(exports, "__esModule", {
     value: true
 });
 exports.CollisionDetection = void 0;
-// Axis-Aligned Bounding Box (AABB) collision detection system
-const types_1 = __turbopack_context__.r("[project]/packages/game-engine/dist/types/index.js [app-ssr] (ecmascript)");
-/** Padding for obstacle bounds - prevents jump-through on sides/bottom. No top padding on blocks so players can land on them. */ const OBSTACLE_SIDE_PADDING = 4;
-const OBSTACLE_SPIKE_FULL_PADDING = 6;
 class CollisionDetection {
     /**
      * Check if two game objects are colliding using AABB collision detection
@@ -42,26 +38,6 @@ class CollisionDetection {
      * @returns true if objects are colliding
      */ static checkAABBCollision(a, b) {
         return a.position.x < b.position.x + b.size.x && a.position.x + a.size.x > b.position.x && a.position.y < b.position.y + b.size.y && a.position.y + a.size.y > b.position.y;
-    }
-    /**
-     * Check collision with an obstacle. Uses asymmetric padding:
-     * - OBSTACLE_BLOCK: padding on sides/bottom only (no top) so players can land on blocks
-     * - OBSTACLE_SPIKE: full padding on all sides
-     */ static checkObstacleCollision(player, obstacle) {
-        if (obstacle.type === types_1.GameObjectType.OBSTACLE_BLOCK) {
-            const p = OBSTACLE_SIDE_PADDING;
-            const left = obstacle.position.x - p;
-            const right = obstacle.position.x + obstacle.size.x + p;
-            const top = obstacle.position.y; // No top padding - landable
-            const bottom = obstacle.position.y + obstacle.size.y + p;
-            return player.position.x < right && player.position.x + player.size.x > left && player.position.y < bottom && player.position.y + player.size.y > top;
-        }
-        const p = OBSTACLE_SPIKE_FULL_PADDING;
-        const left = obstacle.position.x - p;
-        const right = obstacle.position.x + obstacle.size.x + p;
-        const top = obstacle.position.y - p;
-        const bottom = obstacle.position.y + obstacle.size.y + p;
-        return player.position.x < right && player.position.x + player.size.x > left && player.position.y < bottom && player.position.y + player.size.y > top;
     }
     /**
      * Check if a point is inside a game object
@@ -73,18 +49,11 @@ class CollisionDetection {
     }
     /**
      * Find all collisions between a game object and a list of objects
-     * Uses expanded obstacle bounds for OBSTACLE_SPIKE and OBSTACLE_BLOCK to prevent jump-through.
      * @param obj The object to check collisions for
      * @param objects List of objects to check against
      * @returns Array of objects that are colliding with obj
      */ static findCollisions(obj, objects) {
-        return objects.filter((other)=>{
-            if (other.id === obj.id || !other.active) return false;
-            if (other.type === types_1.GameObjectType.OBSTACLE_SPIKE || other.type === types_1.GameObjectType.OBSTACLE_BLOCK) {
-                return this.checkObstacleCollision(obj, other);
-            }
-            return this.checkAABBCollision(obj, other);
-        });
+        return objects.filter((other)=>other.id !== obj.id && other.active && this.checkAABBCollision(obj, other));
     }
     /**
      * Calculate the penetration depth of a collision
@@ -136,7 +105,7 @@ class PhysicsEngine {
         // Default physics configuration (tuned for Geometry Dash-like gameplay)
         this.config = {
             gravity: 2800,
-            jumpForce: -680,
+            jumpForce: -750,
             maxVelocity: {
                 x: 400,
                 y: 1200
@@ -180,7 +149,8 @@ class PhysicsEngine {
         obj.position.y += obj.velocity.y * deltaTime;
     }
     /**
-     * Make the player jump - fixed height, any tap (even 0.1ms) clears 1 block (50px)
+     * Make the player jump
+     * @param player The player object
      */ jump(player) {
         if (player.isOnGround && !player.isJumping) {
             player.velocity.y = this.config.jumpForce;
@@ -200,8 +170,7 @@ class PhysicsEngine {
      * @param player The player object
      * @param platforms List of platform objects
      * @param deltaTime Time elapsed since last update (in seconds)
-     * @param floorY Optional - ground surface Y (player bottom clamped to never go below this)
-     */ updatePlayer(player, platforms, deltaTime, floorY) {
+     */ updatePlayer(player, platforms, deltaTime) {
         // Apply gravity
         this.applyGravity(player, deltaTime);
         // Update position
@@ -218,28 +187,9 @@ class PhysicsEngine {
                 }
             }
         }
-        // Prevent falling through floors - resolve penetration when player has dropped into a platform
-        if (player.velocity.y >= 0) {
-            const playerBottom = player.position.y + player.size.y;
-            // Sort by platform top (ascending) so we snap to the highest platform we've penetrated
-            const sortedPlatforms = [
-                ...platforms
-            ].sort((a, b)=>a.position.y - b.position.y);
-            for (const platform of sortedPlatforms){
-                if (!platform.active) continue;
-                const platformTop = platform.position.y;
-                const horizontalOverlap = player.position.x + player.size.x > platform.position.x && player.position.x < platform.position.x + platform.size.x;
-                // Player has fallen into/through the platform (bottom penetrated past top)
-                if (horizontalOverlap && playerBottom > platformTop) {
-                    player.position.y = platformTop - player.size.y;
-                    player.velocity.y = 0;
-                    break; // Resolve one platform per frame
-                }
-            }
-        }
         // Check ground collision
         const wasOnGround = player.isOnGround;
-        player.isOnGround = CollisionDetection_1.CollisionDetection.isOnGround(player, platforms, 12);
+        player.isOnGround = CollisionDetection_1.CollisionDetection.isOnGround(player, platforms, 5);
         if (player.isOnGround) {
             // Snap to platform
             const groundPlatform = this.findGroundPlatform(player, platforms);
@@ -251,16 +201,6 @@ class PhysicsEngine {
         } else if (wasOnGround && !player.isOnGround) {
             // Just left the ground (falling)
             player.isJumping = false;
-        }
-        // Hard floor clamp - keep player above floor at all times (failsafe)
-        if (floorY !== undefined) {
-            const playerBottom = player.position.y + player.size.y;
-            if (playerBottom > floorY) {
-                player.position.y = floorY - player.size.y;
-                player.velocity.y = 0;
-                player.isOnGround = true;
-                player.isJumping = false;
-            }
         }
     // Apply friction to horizontal movement (optional)
     // player.velocity.x *= this.config.friction;
@@ -276,7 +216,7 @@ class PhysicsEngine {
             if (!platform.active) continue;
             const platformTop = platform.position.y;
             const horizontalOverlap = player.position.x + player.size.x > platform.position.x && player.position.x < platform.position.x + platform.size.x;
-            if (horizontalOverlap && Math.abs(bottomY - platformTop) <= 12) {
+            if (horizontalOverlap && Math.abs(bottomY - platformTop) <= 5) {
                 return platform;
             }
         }
@@ -290,17 +230,8 @@ class PhysicsEngine {
      */ handlePlayerCollision(player, collidedObject) {
         switch(collidedObject.type){
             case types_1.GameObjectType.OBSTACLE_SPIKE:
-                player.health = 0;
-                return true;
             case types_1.GameObjectType.OBSTACLE_BLOCK:
-                // Landing on top of a block is safe - treat like a platform
-                const playerBottom = player.position.y + player.size.y;
-                const blockTop = collidedObject.position.y;
-                const landingTolerance = 18; // Forgiving window for landing
-                const isLandingOnTop = playerBottom >= blockTop - 4 && playerBottom <= blockTop + landingTolerance && player.velocity.y >= -150; // Falling or just landed (allow slight upward at peak)
-                if (isLandingOnTop) {
-                    return false; // Not fatal - physics will snap player on top
-                }
+                // Fatal collision - game ends
                 player.health = 0;
                 return true;
             case types_1.GameObjectType.PLATFORM:
@@ -543,8 +474,7 @@ class GameEngine {
             cameraOffset: 0,
             isPaused: false,
             isGameOver: false,
-            score: 0,
-            elapsedTime: 0
+            score: 0
         };
     }
     /**
@@ -593,47 +523,16 @@ class GameEngine {
         // Request next frame
         this.animationFrameId = requestAnimationFrame(this.gameLoop.bind(this));
     }
-    update(deltaTime) {
+    /**
+     * Update game state
+     */ update(deltaTime) {
         if (this.gameState.isGameOver) return;
-        // CRITICAL: Floor clamp FIRST - fix any bad state from previous frame immediately
-        const player = this.gameState.player;
-        const playerBottom = player.position.y + player.size.y;
-        if (playerBottom > GameEngine.GROUND_Y) {
-            player.position.y = GameEngine.GROUND_Y - player.size.y;
-            player.velocity.y = 0;
-            player.isOnGround = true;
-            player.isJumping = false;
-        }
         // Handle input
         this.handleInput();
         if (this.gameState.isPaused) return;
-        this.gameState.elapsedTime += deltaTime;
-        // Update player physics - include OBSTACLE_BLOCK so player can land on top of blocks
-        const levelPlatforms = this.gameState.gameObjects.filter((obj)=>(obj.type === types_1.GameObjectType.PLATFORM || obj.type === types_1.GameObjectType.OBSTACLE_BLOCK) && obj.active);
-        // Permanent safety floor - prevents falling through (never unloaded, spans entire level)
-        const safetyFloor = {
-            id: '__safety_floor__',
-            position: {
-                x: -5000,
-                y: GameEngine.GROUND_Y
-            },
-            velocity: {
-                x: 0,
-                y: 0
-            },
-            size: {
-                x: 20000,
-                y: 50
-            },
-            type: types_1.GameObjectType.PLATFORM,
-            active: true
-        };
-        const platforms = [
-            safetyFloor,
-            ...levelPlatforms
-        ];
-        // floorY = ground surface - player bottom clamped to never go below this
-        this.physicsEngine.updatePlayer(this.gameState.player, platforms, deltaTime, GameEngine.GROUND_Y);
+        // Update player physics
+        const platforms = this.gameState.gameObjects.filter((obj)=>obj.type === types_1.GameObjectType.PLATFORM && obj.active);
+        this.physicsEngine.updatePlayer(this.gameState.player, platforms, deltaTime);
         // Maintain player's forward speed
         this.physicsEngine.setPlayerRunSpeed(this.gameState.player, this.config.playerSpeed);
         // Update camera to follow player
@@ -642,16 +541,11 @@ class GameEngine {
         this.updateVisibleObjects();
         // Check collisions
         this.checkCollisions();
-        // Check out of bounds - only die from going off left or above; never from falling
-        // Final floor clamp (belt and suspenders)
-        if (player.position.y + player.size.y > GameEngine.GROUND_Y) {
-            player.position.y = GameEngine.GROUND_Y - player.size.y;
-            player.velocity.y = 0;
-            player.isOnGround = true;
-            player.isJumping = false;
-        }
-        // Only trigger game over for left/above bounds, not falling
-        if (player.position.x + player.size.x < 0 || player.position.y + player.size.y < 0) {
+        // Check if player fell out of bounds
+        if (this.physicsEngine.isOutOfBounds(this.gameState.player, {
+            width: this.config.canvasWidth,
+            height: this.config.canvasHeight
+        })) {
             this.handleGameOver();
         }
         // Update score
@@ -693,9 +587,8 @@ class GameEngine {
      */ updateVisibleObjects() {
         const loadDistance = this.config.canvasWidth * 2;
         const unloadDistance = -this.config.canvasWidth;
-        // Remove objects that are too far behind (never unload floor/platforms - prevents fall-through)
+        // Remove objects that are too far behind
         this.gameState.gameObjects = this.gameState.gameObjects.filter((obj)=>{
-            if (obj.type === types_1.GameObjectType.PLATFORM) return true; // Always keep platforms
             const relativeX = obj.position.x - this.gameState.cameraOffset;
             return relativeX > unloadDistance;
         });
@@ -780,10 +673,7 @@ class GameEngine {
         this.inputHandler.destroy();
     }
 }
-exports.GameEngine = GameEngine;
-/**
- * Update game state
- */ /** Ground surface Y - player bottom must never go below this. Matches level design. */ GameEngine.GROUND_Y = 500; //# sourceMappingURL=GameEngine.js.map
+exports.GameEngine = GameEngine; //# sourceMappingURL=GameEngine.js.map
 }),
 "[project]/packages/game-engine/dist/engine/index.js [app-ssr] (ecmascript)", ((__turbopack_context__, module, exports) => {
 "use strict";
@@ -2942,24 +2832,68 @@ function createTestLevel() {
     // GROUND LEVEL: y = 500 (player can stand here)
     // PLAYER: 30px tall, stands at y = 470 when on ground
     // MAX JUMP HEIGHT: ~100px, can reach y = 370
-    // Single solid floor - no gaps, no seams, impossible to fall through
-    platforms.push({
-        id: 'solid-floor',
-        position: {
-            x: 0,
-            y: 500
+    // Create continuous ground platforms
+    for(let i = 0; i < 60; i++){
+        // Skip some sections to create gaps
+        const isGap = i >= 12 && i < 14 || i >= 25 && i < 28 || i >= 40 && i < 43;
+        if (!isGap) {
+            platforms.push({
+                id: `platform-${i}`,
+                position: {
+                    x: i * 100,
+                    y: 500
+                },
+                velocity: {
+                    x: 0,
+                    y: 0
+                },
+                size: {
+                    x: 100,
+                    y: 50
+                },
+                type: types_1.GameObjectType.PLATFORM,
+                active: true,
+                width: 100
+            });
+        }
+    }
+    // Add platforms to cross gaps (elevated slightly)
+    const gapPlatforms = [
+        {
+            x: 1250,
+            y: 420,
+            width: 150
         },
-        velocity: {
-            x: 0,
-            y: 0
+        {
+            x: 2600,
+            y: 400,
+            width: 180
         },
-        size: {
-            x: 6000,
-            y: 50
-        },
-        type: types_1.GameObjectType.PLATFORM,
-        active: true,
-        width: 6000
+        {
+            x: 4100,
+            y: 410,
+            width: 160
+        }
+    ];
+    gapPlatforms.forEach((config, i)=>{
+        platforms.push({
+            id: `gap-platform-${i}`,
+            position: {
+                x: config.x,
+                y: config.y
+            },
+            velocity: {
+                x: 0,
+                y: 0
+            },
+            size: {
+                x: config.width,
+                y: 30
+            },
+            type: types_1.GameObjectType.PLATFORM,
+            active: true,
+            width: config.width
+        });
     });
     // DIFFICULTY PROGRESSION: Easy → Medium → Hard
     // SECTION 1: Easy (x: 0-1500) - Single obstacles, well spaced
@@ -3040,13 +2974,13 @@ function createTestLevel() {
             damage: 1
         });
     });
-    // SECTION 3: Hard (x: 3300+) - More spread out after ~11 second mark
+    // SECTION 3: Hard (x: 3500-6000) - Tight spacing, multiple obstacles
     const hardSpikes = [
         3600,
+        3850,
         4200,
-        4800,
-        5400,
-        6000
+        4550,
+        5000
     ];
     hardSpikes.forEach((x, i)=>{
         obstacles.push({
@@ -3070,20 +3004,24 @@ function createTestLevel() {
     });
     const hardBlocks = [
         {
-            x: 3900,
+            x: 3700,
             y: 445
         },
         {
-            x: 4500,
+            x: 4000,
             y: 440
         },
         {
-            x: 5100,
+            x: 4400,
             y: 445
         },
         {
-            x: 5700,
+            x: 4800,
             y: 450
+        },
+        {
+            x: 5300,
+            y: 440
         }
     ];
     hardBlocks.forEach((pos, i)=>{
@@ -3204,6 +3142,7 @@ function createTestLevel() {
 exports.defaultLevelGenerator = exports.generateTrainingData = exports.extractFeatureVector = exports.getTemplatesByDifficulty = exports.getAllTemplates = exports.TEMPLATE_REGISTRY = exports.EXTREME_CHALLENGE = exports.MIXED_OBSTACLES = exports.PLATFORM_JUMPS = exports.SPIKE_RHYTHM = exports.STAIRCASE_BLOCKS = exports.SIMPLE_GAP = exports.FLAT_GROUND_SPIKE = exports.analyzeSegmentDifficulty = exports.applyConstraints = exports.WaveBasedStrategy = exports.NoiseBasedStrategy = exports.TemplateBasedStrategy = exports.SeededRandom = exports.ProceduralGenerator = exports.createTestLevel = exports.StubMLModel = exports.LevelGenerator = void 0;
 exports.createLevelGenerator = createLevelGenerator;
 exports.generateLevel = generateLevel;
+exports.createInfiniteLevel = createInfiniteLevel;
 exports.generateLevelWithML = generateLevelWithML;
 exports.generateLevelBatch = generateLevelBatch;
 exports.generateDifficultySpectrum = generateDifficultySpectrum;
@@ -3359,6 +3298,7 @@ Object.defineProperty(exports, "generateTrainingData", {
 // CONVENIENCE FUNCTIONS
 // ============================================================================
 const LevelGenerator_2 = __turbopack_context__.r("[project]/packages/game-engine/dist/levels/LevelGenerator.js [app-ssr] (ecmascript)");
+const types_1 = __turbopack_context__.r("[project]/packages/game-engine/dist/types/index.js [app-ssr] (ecmascript)");
 /**
  * Create a default level generator instance
  */ function createLevelGenerator() {
@@ -3374,6 +3314,85 @@ const LevelGenerator_2 = __turbopack_context__.r("[project]/packages/game-engine
         seed,
         style: 'classic'
     });
+}
+/**
+ * Convenience helper used by the web app.
+ *
+ * Creates a simple manual level:
+ * - Flat ground the player can safely spawn on
+ * - Exactly three spikes, evenly spaced along the course
+ */ function createInfiniteLevel() {
+    const platforms = [];
+    const obstacles = [];
+    // Ground: continuous platform under the player and spikes
+    // Player is 30px tall, stands at y = 470 when on ground (platform top at y = 450)
+    // Platform size.y = 50, so place its origin at y = 500
+    const groundLength = 3000;
+    platforms.push({
+        id: 'ground-0',
+        position: {
+            x: 0,
+            y: 500
+        },
+        velocity: {
+            x: 0,
+            y: 0
+        },
+        size: {
+            x: groundLength,
+            y: 50
+        },
+        type: types_1.GameObjectType.PLATFORM,
+        active: true,
+        width: groundLength
+    });
+    // Three spikes, evenly spaced along the ground, all after the spawn point
+    const spikePositions = [
+        800,
+        1600,
+        2400
+    ];
+    spikePositions.forEach((x, i)=>{
+        obstacles.push({
+            id: `spike-${i}`,
+            position: {
+                x,
+                y: 470
+            },
+            velocity: {
+                x: 0,
+                y: 0
+            },
+            size: {
+                x: 30,
+                y: 30
+            },
+            type: types_1.GameObjectType.OBSTACLE_SPIKE,
+            active: true,
+            damage: 1
+        });
+    });
+    const objects = [
+        ...platforms,
+        ...obstacles
+    ];
+    const segment = {
+        id: 'segment-simple-1',
+        startX: 0,
+        length: groundLength,
+        difficulty: 0.3,
+        objects
+    };
+    return {
+        id: 'simple-level-3-spikes',
+        name: 'Three Spikes',
+        segments: [
+            segment
+        ],
+        totalLength: groundLength,
+        difficulty: 0.3,
+        generatedBy: 'manual'
+    };
 }
 /**
  * Generate a level with ML if model is provided
@@ -3990,7 +4009,7 @@ const GameUI = ({ gameState, onRestart, onPause, onResume })=>{
         className: "text-purple-300 text-xs uppercase tracking-wider mb-1"
     }, "Distance"), react_1.default.createElement("div", {
         className: "text-white text-2xl font-bold"
-    }, Math.floor((gameState.elapsedTime ?? 0) * 30), "m")), react_1.default.createElement("div", {
+    }, Math.floor(gameState.cameraOffset / 10), "m")), react_1.default.createElement("div", {
         className: "bg-pink-900/30 backdrop-blur-sm rounded-lg p-4 border border-pink-400/20"
     }, react_1.default.createElement("div", {
         className: "text-pink-300 text-xs uppercase tracking-wider mb-1"
@@ -4201,8 +4220,7 @@ const createInitialGameState = ()=>{
         cameraOffset: 0,
         isPaused: false,
         isGameOver: false,
-        score: 0,
-        elapsedTime: 0
+        score: 0
     };
 };
 const GameExample = ()=>{
@@ -4476,6 +4494,7 @@ function formatSessionTime(seconds) {
 }
 function GeometryDashGame({ width = 1200, height = 600 }) {
     const canvasRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useRef"])(null);
+    const gameContainerRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useRef"])(null);
     const engineRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useRef"])(null);
     const rendererRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useRef"])(null);
     const [gameState, setGameState] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(null);
@@ -4489,8 +4508,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
-        // Create test level
-        const level = (0, __TURBOPACK__imported__module__$5b$project$5d2f$packages$2f$game$2d$engine$2f$dist$2f$index$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["createTestLevel"])();
+        const level = (0, __TURBOPACK__imported__module__$5b$project$5d2f$packages$2f$game$2d$engine$2f$dist$2f$index$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["createInfiniteLevel"])();
         // Create game engine
         const engine = new __TURBOPACK__imported__module__$5b$project$5d2f$packages$2f$game$2d$engine$2f$dist$2f$index$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["GameEngine"](level, {
             canvasWidth: width,
@@ -4542,6 +4560,8 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
         if (engineRef.current) {
             engineRef.current.start();
             setHasStarted(true);
+            // Focus game container so keyboard (space) reliably reaches the game
+            gameContainerRef.current?.focus();
         }
     }, []);
     const handleRestart = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useCallback"])(()=>{
@@ -4551,6 +4571,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
             setIsGameOver(false);
             setHasExtracted(false);
             setHasStarted(true);
+            gameContainerRef.current?.focus();
         }
     }, []);
     const handleExtractConfirm = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useCallback"])(()=>{
@@ -4597,7 +4618,10 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
         showExtractModal
     ]);
     return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-        className: "relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900",
+        ref: gameContainerRef,
+        tabIndex: 0,
+        className: "relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none",
+        "aria-label": "Game",
         children: [
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("canvas", {
                 ref: canvasRef,
@@ -4606,7 +4630,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                 className: "border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
             }, void 0, false, {
                 fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                lineNumber: 151,
+                lineNumber: 159,
                 columnNumber: 7
             }, this),
             !hasStarted && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4619,7 +4643,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                             children: "Ready to Play?"
                         }, void 0, false, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 162,
+                            lineNumber: 170,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -4627,7 +4651,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                             children: "Survive as long as you can. Press ENTER or click Start to extract and cash out before you die!"
                         }, void 0, false, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 165,
+                            lineNumber: 173,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4636,18 +4660,18 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                             children: "Start"
                         }, void 0, false, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 168,
+                            lineNumber: 176,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                    lineNumber: 161,
+                    lineNumber: 169,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                lineNumber: 160,
+                lineNumber: 168,
                 columnNumber: 9
             }, this),
             gameState && hasStarted && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4663,7 +4687,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: "Time"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 184,
+                                    lineNumber: 192,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4671,18 +4695,18 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: formatSessionTime(gameState.elapsedTime)
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 185,
+                                    lineNumber: 193,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 183,
+                            lineNumber: 191,
                             columnNumber: 13
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                        lineNumber: 182,
+                        lineNumber: 190,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4694,32 +4718,32 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: "SPACE / CLICK - Jump"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 194,
+                                    lineNumber: 202,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                     children: "ENTER - Extract & Cash Out"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 195,
+                                    lineNumber: 203,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                     children: "R - Restart"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 196,
+                                    lineNumber: 204,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 193,
+                            lineNumber: 201,
                             columnNumber: 13
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                        lineNumber: 192,
+                        lineNumber: 200,
                         columnNumber: 11
                     }, this),
                     showExtractModal && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4732,7 +4756,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: "Confirm Extract"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 204,
+                                    lineNumber: 212,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -4740,7 +4764,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: "Cash out now with your current time? Your run will end."
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 207,
+                                    lineNumber: 215,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4752,7 +4776,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Yes"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 211,
+                                            lineNumber: 219,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4761,24 +4785,24 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "No"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 217,
+                                            lineNumber: 225,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 210,
+                                    lineNumber: 218,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 203,
+                            lineNumber: 211,
                             columnNumber: 15
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                        lineNumber: 202,
+                        lineNumber: 210,
                         columnNumber: 13
                     }, this),
                     hasExtracted && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4791,7 +4815,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: "EXTRACTED!"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 232,
+                                    lineNumber: 240,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4802,7 +4826,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Time Cashed Out"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 236,
+                                            lineNumber: 244,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4810,13 +4834,13 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: formatSessionTime(gameState.elapsedTime)
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 237,
+                                            lineNumber: 245,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 235,
+                                    lineNumber: 243,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4828,7 +4852,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Play Again"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 242,
+                                            lineNumber: 250,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$client$2f$app$2d$dir$2f$link$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["default"], {
@@ -4837,24 +4861,24 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Back to Homepage"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 248,
+                                            lineNumber: 256,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 241,
+                                    lineNumber: 249,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 231,
+                            lineNumber: 239,
                             columnNumber: 15
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                        lineNumber: 230,
+                        lineNumber: 238,
                         columnNumber: 13
                     }, this),
                     isGameOver && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4867,7 +4891,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                     children: "GAME OVER"
                                 }, void 0, false, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 263,
+                                    lineNumber: 271,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4878,7 +4902,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Time Survived"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 267,
+                                            lineNumber: 275,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4886,13 +4910,13 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: formatSessionTime(gameState.elapsedTime)
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 268,
+                                            lineNumber: 276,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 266,
+                                    lineNumber: 274,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4904,7 +4928,7 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Try Again"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 273,
+                                            lineNumber: 281,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$client$2f$app$2d$dir$2f$link$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["default"], {
@@ -4913,36 +4937,36 @@ function GeometryDashGame({ width = 1200, height = 600 }) {
                                             children: "Back to Homepage"
                                         }, void 0, false, {
                                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                            lineNumber: 279,
+                                            lineNumber: 287,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                                    lineNumber: 272,
+                                    lineNumber: 280,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                            lineNumber: 262,
+                            lineNumber: 270,
                             columnNumber: 15
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                        lineNumber: 261,
+                        lineNumber: 269,
                         columnNumber: 13
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-                lineNumber: 180,
+                lineNumber: 188,
                 columnNumber: 9
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/apps/web/app/game/components/GeometryDashGame.tsx",
-        lineNumber: 149,
+        lineNumber: 152,
         columnNumber: 5
     }, this);
 }

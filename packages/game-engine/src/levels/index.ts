@@ -86,7 +86,14 @@ export type { SegmentTemplate, SegmentFeatures } from './SegmentTemplates';
 // ============================================================================
 
 import { LevelGenerator } from './LevelGenerator';
-import { LevelGeneratorConfig, Level } from '../types';
+import {
+  LevelGeneratorConfig,
+  Level,
+  LevelSegment,
+  Platform,
+  Obstacle,
+  GameObjectType,
+} from '../types';
 
 /**
  * Create a default level generator instance
@@ -113,17 +120,64 @@ export function generateLevel(
 }
 
 /**
- * Convenience helper used by the web app: create a long,
- * procedurally generated "infinite feeling" level.
+ * Convenience helper used by the web app.
+ *
+ * Creates a simple manual level:
+ * - Flat ground the player can safely spawn on
+ * - Exactly three spikes, evenly spaced along the course
  */
 export function createInfiniteLevel(): Level {
-  const generator = new LevelGenerator();
-  return generator.generate({
-    difficulty: 0.5,
-    length: 5000,
-    seed: Date.now(),
-    style: 'classic',
+  const platforms: Platform[] = [];
+  const obstacles: Obstacle[] = [];
+
+  // Ground: continuous platform under the player and spikes
+  // Player is 30px tall, stands at y = 470 when on ground (platform top at y = 450)
+  // Platform size.y = 50, so place its origin at y = 500
+  const groundLength = 3000;
+
+  platforms.push({
+    id: 'ground-0',
+    position: { x: 0, y: 500 },
+    velocity: { x: 0, y: 0 },
+    size: { x: groundLength, y: 50 },
+    type: GameObjectType.PLATFORM,
+    active: true,
+    width: groundLength,
   });
+
+  // Three spikes, evenly spaced along the ground, all after the spawn point
+  const spikePositions = [800, 1600, 2400];
+
+  spikePositions.forEach((x, i) => {
+    obstacles.push({
+      id: `spike-${i}`,
+      position: { x, y: 470 },
+      velocity: { x: 0, y: 0 },
+      size: { x: 30, y: 30 },
+      type: GameObjectType.OBSTACLE_SPIKE,
+      active: true,
+      damage: 1,
+    });
+  });
+
+  const objects = [...platforms, ...obstacles];
+
+  const segment: LevelSegment = {
+    id: 'segment-simple-1',
+    startX: 0,
+    length: groundLength,
+    difficulty: 0.3,
+    objects,
+  };
+
+  return {
+    id: 'simple-level-3-spikes',
+    name: 'Three Spikes',
+    segments: [segment],
+    totalLength: groundLength,
+    difficulty: 0.3,
+    generatedBy: 'manual',
+  };
 }
 
 /**
