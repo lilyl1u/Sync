@@ -7,15 +7,24 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/web",
-    "dev:web": "npm run dev --workspace=apps/web",
+    "dev": "npm run dev --workspace=@geometrydash/web",
+    "dev:web": "npm run dev --workspace=@geometrydash/web",
     "build": "npm run build --workspaces --if-present",
-    "build:web": "npm run build --workspace=apps/web",
+    "build:web": "npm run build --workspace=@geometrydash/web",
     "lint": "npm run lint --workspaces --if-present",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/.next"
   },
   "devDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "all": "^0.0.0",
+    "dependencies": "^0.0.1",
+    "in": "^0.19.0",
+    "install": "^0.13.0",
+    "project": "^0.1.6",
+    "the": "^1.0.2",
+    "your": "^0.2.3"
   }
 }

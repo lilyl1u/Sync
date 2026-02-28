@@ -71,6 +71,7 @@ export class GameEngine {
       currentLevel: level,
       currentSegmentIndex: 0,
       gameObjects: this.loadVisibleObjects(level, 0),
+      elapsedTime: 0,
       cameraOffset: 0,
       isPaused: false,
       isGameOver: false,
@@ -167,13 +168,12 @@ export class GameEngine {
 
     if (this.gameState.isPaused) return;
 
+    // Track active run duration in seconds for payout logic.
     this.gameState.elapsedTime += deltaTime;
 
-    // Update player physics - include OBSTACLE_BLOCK so player can land on top of blocks
-    const levelPlatforms = this.gameState.gameObjects.filter(
-      (obj) =>
-        (obj.type === GameObjectType.PLATFORM || obj.type === GameObjectType.OBSTACLE_BLOCK) &&
-        obj.active
+    // Update player physics
+    const platforms = this.gameState.gameObjects.filter(
+      (obj) => obj.type === GameObjectType.PLATFORM && obj.active
     );
 
     // Permanent safety floor - prevents falling through (never unloaded, spans entire level)

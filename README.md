@@ -21,7 +21,7 @@ sync/
 │   │   ├── src/
 │   │   │   ├── engine/       # Core game engine (GameEngine, Physics, Collision, Input)
 │   │   │   ├── systems/      # Game systems (Renderer)
-│   │   │   ├── levels/       # Level generation (Procedural, ML-ready)
+│   │   │   ├── levels/       # Level generation (procedural)
 │   │   │   ├── components/   # Game components (Player, Obstacle, Canvas)
 │   │   │   ├── types/        # TypeScript type definitions
 │   │   │   └── index.ts      # Package entry point
@@ -48,22 +48,8 @@ sync/
 │       │   ├── game.ts      # Game-related types
 │       │   ├── user.ts      # User-related types
 │       │   ├── solana.ts    # Blockchain types
-│       │   ├── ml.ts        # ML-related types
 │       │   └── index.ts
 │       └── package.json
-│
-├── services/
-│   └── ml-service/           # Python ML service
-│       ├── src/
-│       │   ├── api/         # FastAPI endpoints
-│       │   ├── models/      # ML model code
-│       │   ├── training/    # Training scripts
-│       │   └── inference/   # Inference code
-│       ├── pretrained/      # Pretrained models
-│       ├── data/            # Training data
-│       ├── scripts/         # Utility scripts
-│       ├── requirements.txt
-│       └── Dockerfile
 │
 ├── docs/                     # Documentation
 ├── package.json             # Root workspace config
@@ -77,7 +63,6 @@ sync/
 - Canvas-based rendering system
 - Physics engine with collision detection
 - Procedural level generation
-- ML-ready architecture for AI-generated levels
 
 ### Solana Integration
 - Time-alive gambling mechanics
@@ -85,17 +70,10 @@ sync/
 - Smart contracts built with Anchor
 - Accuracy-based payout system (up to 10x multiplier)
 
-### ML Music Genre Prediction
-- Pretrained model integration
-- Fine-tuning based on user's Spotify data
-- FastAPI-based service
-- Real-time inference
-
 ### Spotify Integration
 - User authentication
 - Playlist and track data fetching
 - Audio feature extraction
-- Integration with ML service for personalized recommendations
 
 ## Getting Started
 
@@ -103,7 +81,6 @@ sync/
 
 - Node.js 20+
 - npm or yarn
-- Python 3.11+ (for ML service)
 - Rust & Anchor (for Solana development)
 - Solana CLI
 
@@ -149,24 +126,6 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to see the app.
 Navigate to [http://localhost:3000/game](http://localhost:3000/game) to play the game.
-
-### ML Service
-
-```bash
-cd services/ml-service
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the service
-uvicorn src.api.main:app --reload
-```
-
-API docs available at [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ### Solana Programs
 
@@ -245,42 +204,6 @@ npm run <script> --workspaces
 
 - [Game Engine Architecture](./packages/game-engine/README.md)
 - [Solana Integration](./packages/solana/README.md)
-- [ML Service Guide](./services/ml-service/README.md)
-- [ML Integration Guide](./ML_INTEGRATION_GUIDE.md)
-
-## Project Goals
-
-1. **Geometry Dash Clone**: Fully functional platformer game with procedural level generation
-2. **Solana Gambling**: Decentralized betting system based on survival time predictions
-3. **ML Integration**:
-   - Music genre prediction from Spotify data
-   - Fine-tuning models based on user preferences
-   - Potential for ML-generated game levels
-
-## Tech Stack
-
-**Frontend:**
-- Next.js 16 (App Router)
-- React 19
-- TypeScript
-- Tailwind CSS
-
-**Game Engine:**
-- TypeScript
-- Canvas API
-- Custom physics engine
-
-**Blockchain:**
-- Solana
-- Anchor Framework
-- @solana/web3.js
-
-**ML Service:**
-- Python 3.11
-- FastAPI
-- PyTorch/TensorFlow
-- Transformers (Hugging Face)
-- Spotipy
 
 ## Contributing
 

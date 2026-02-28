@@ -13,6 +13,3 @@ export * from './user';
 
 // Solana blockchain types
 export * from './solana';
-
-// Machine Learning types
-export * from './ml';

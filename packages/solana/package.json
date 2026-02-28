@@ -10,18 +10,20 @@
     "deploy": "anchor deploy",
     "deploy:devnet": "anchor deploy --provider.cluster devnet",
     "deploy:mainnet": "anchor deploy --provider.cluster mainnet",
+    "pool:init": "node scripts/init-pool.cjs",
+    "pool:fund": "node scripts/fund-pool.cjs",
     "sdk:build": "tsc --project sdk/tsconfig.json",
     "clean": "anchor clean"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.30.1",
+    "@coral-xyz/anchor": "0.32.1",
     "@solana/web3.js": "^1.95.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.0",
-    "typescript": "^5.4.0",
     "chai": "^4.3.10",
-    "mocha": "^10.3.0"
+    "mocha": "^10.3.0",
+    "typescript": "^5.4.0"
   },
   "keywords": [
     "solana",

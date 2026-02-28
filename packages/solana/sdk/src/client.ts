@@ -2,238 +2,166 @@ import {
   Connection,
   PublicKey,
   SystemProgram,
-  Transaction,
-  TransactionInstruction,
-  Keypair,
   LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 import { Program, AnchorProvider, Idl, BN } from '@coral-xyz/anchor';
-import {
-  Pool,
-  Bet,
-  PlaceBetParams,
-  SettleBetParams,
-  InitializePoolParams,
-  BetOutcome,
-  BetResult,
-} from './types';
+import { InitializePoolParams, Pool, Session } from './types';
 
 export class GamblingClient {
   private program: Program;
   private provider: AnchorProvider;
-  private connection: Connection;
   private programId: PublicKey;
 
-  constructor(
-    connection: Connection,
-    wallet: any,
-    programId: PublicKey,
-    idl: Idl
-  ) {
-    this.connection = connection;
+  constructor(connection: Connection, wallet: any, programId: PublicKey, idl: Idl) {
     this.programId = programId;
     this.provider = new AnchorProvider(connection, wallet, {
       commitment: 'confirmed',
+      preflightCommitment: 'confirmed',
     });
     this.program = new Program(idl, programId, this.provider);
   }
 
-  /**
-   * Derive the PDA for a pool
-   */
-  async getPoolPDA(authority: PublicKey): Promise<[PublicKey, number]> {
+  getPoolPDA(authority: PublicKey): [PublicKey, number] {
     return PublicKey.findProgramAddressSync(
       [Buffer.from('pool'), authority.toBuffer()],
-      this.programId
+      this.programId,
     );
   }
 
-  /**
-   * Derive the PDA for a pool vault
-   */
-  async getPoolVaultPDA(poolPubkey: PublicKey): Promise<[PublicKey, number]> {
+  getVaultPDA(pool: PublicKey): [PublicKey, number] {
     return PublicKey.findProgramAddressSync(
-      [Buffer.from('pool'), poolPubkey.toBuffer()],
-      this.programId
+      [Buffer.from('vault'), pool.toBuffer()],
+      this.programId,
     );
   }
 
-  /**
-   * Derive the PDA for a bet
-   */
-  async getBetPDA(
-    poolPubkey: PublicKey,
-    player: PublicKey
-  ): Promise<[PublicKey, number]> {
+  getSessionPDA(pool: PublicKey, player: PublicKey): [PublicKey, number] {
     return PublicKey.findProgramAddressSync(
-      [Buffer.from('bet'), poolPubkey.toBuffer(), player.toBuffer()],
-      this.programId
+      [Buffer.from('session'), pool.toBuffer(), player.toBuffer()],
+      this.programId,
     );
   }
 
-  /**
-   * Initialize a new gambling pool
-   */
   async initializePool(params: InitializePoolParams): Promise<string> {
     const authority = this.provider.wallet.publicKey;
-    const [poolPDA] = await this.getPoolPDA(authority);
-    const [vaultPDA] = await this.getPoolVaultPDA(poolPDA);
+    const [pool] = this.getPoolPDA(authority);
+    const [vault] = this.getVaultPDA(pool);
 
-    const tx = await this.program.methods
+    return this.program.methods
       .initializePool(
-        new BN(params.minBet),
-        new BN(params.maxBet),
-        params.houseEdge
+        new BN(params.buyInBaseUnits),
+        new BN(params.payoutRateBaseUnitsPerSecond),
       )
       .accounts({
-        pool: poolPDA,
-        authority: authority,
-        poolVault: vaultPDA,
+        pool,
+        vault,
+        authority,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
-
-    return tx;
   }
 
-  /**
-   * Place a bet on predicted survival time
-   */
-  async placeBet(
-    poolPubkey: PublicKey,
-    params: PlaceBetParams
-  ): Promise<string> {
-    const player = this.provider.wallet.publicKey;
-    const [betPDA] = await this.getBetPDA(poolPubkey, player);
-    const [vaultPDA] = await this.getPoolVaultPDA(poolPubkey);
+  async fundPool(authority: PublicKey, amount: number): Promise<string> {
+    const [pool] = this.getPoolPDA(authority);
+    const [vault] = this.getVaultPDA(pool);
 
-    const tx = await this.program.methods
-      .placeBet(new BN(params.betAmount), new BN(params.predictedTimeAlive))
+    return this.program.methods
+      .fundPool(new BN(amount))
       .accounts({
-        bet: betPDA,
-        pool: poolPubkey,
-        player: player,
-        poolVault: vaultPDA,
+        pool,
+        vault,
+        authority: this.provider.wallet.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
-
-    return tx;
   }
 
-  /**
-   * Settle a bet after game completion
-   */
-  async settleBet(
-    poolPubkey: PublicKey,
-    params: SettleBetParams
-  ): Promise<string> {
+  async startSession(authority: PublicKey): Promise<string> {
     const player = this.provider.wallet.publicKey;
-    const [betPDA] = await this.getBetPDA(poolPubkey, player);
-    const [vaultPDA] = await this.getPoolVaultPDA(poolPubkey);
+    const [pool] = this.getPoolPDA(authority);
+    const [vault] = this.getVaultPDA(pool);
+    const [session] = this.getSessionPDA(pool, player);
 
-    const tx = await this.program.methods
-      .settleBet(new BN(params.actualTimeAlive))
+    return this.program.methods
+      .startSession()
       .accounts({
-        bet: betPDA,
-        pool: poolPubkey,
-        player: player,
-        poolVault: vaultPDA,
+        pool,
+        vault,
+        session,
+        player,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
-
-    return tx;
   }
 
-  /**
-   * Fetch pool data
-   */
+  async extract(authority: PublicKey): Promise<string> {
+    const player = this.provider.wallet.publicKey;
+    const [pool] = this.getPoolPDA(authority);
+    const [vault] = this.getVaultPDA(pool);
+    const [session] = this.getSessionPDA(pool, player);
+
+    return this.program.methods
+      .extract()
+      .accounts({
+        pool,
+        vault,
+        session,
+        player,
+      })
+      .rpc();
+  }
+
+  async recordDeath(authority: PublicKey): Promise<string> {
+    const player = this.provider.wallet.publicKey;
+    const [pool] = this.getPoolPDA(authority);
+    const [vault] = this.getVaultPDA(pool);
+    const [session] = this.getSessionPDA(pool, player);
+
+    return this.program.methods
+      .recordDeath()
+      .accounts({
+        pool,
+        vault,
+        session,
+        player,
+      })
+      .rpc();
+  }
+
   async getPool(poolPubkey: PublicKey): Promise<Pool> {
     const poolData = await this.program.account.pool.fetch(poolPubkey);
     return {
       authority: poolData.authority,
-      minBet: poolData.minBet.toNumber(),
-      maxBet: poolData.maxBet.toNumber(),
-      houseEdge: poolData.houseEdge,
-      totalWagered: poolData.totalWagered.toNumber(),
-      totalPaidOut: poolData.totalPaidOut.toNumber(),
-      bump: poolData.bump,
+      buyInBaseUnits: poolData.buyInBaseUnits.toNumber(),
+      payoutRateBaseUnitsPerSecond: poolData.payoutRateBaseUnitsPerSecond.toNumber(),
+      poolBump: poolData.poolBump,
+      vaultBump: poolData.vaultBump,
+      totalSessionsStarted: poolData.totalSessionsStarted.toNumber(),
+      totalBuyInsCollected: poolData.totalBuyInsCollected.toNumber(),
+      totalPayouts: poolData.totalPayouts.toNumber(),
     };
   }
 
-  /**
-   * Fetch bet data
-   */
-  async getBet(betPubkey: PublicKey): Promise<Bet> {
-    const betData = await this.program.account.bet.fetch(betPubkey);
+  async getSession(sessionPubkey: PublicKey): Promise<Session> {
+    const sessionData = await this.program.account.session.fetch(sessionPubkey);
     return {
-      player: betData.player,
-      pool: betData.pool,
-      amount: betData.amount.toNumber(),
-      predictedTimeAlive: betData.predictedTimeAlive.toNumber(),
-      actualTimeAlive: betData.actualTimeAlive.toNumber(),
-      settled: betData.settled,
-      won: betData.won,
-      payout: betData.payout.toNumber(),
-      timestamp: betData.timestamp.toNumber(),
-      bump: betData.bump,
+      player: sessionData.player,
+      pool: sessionData.pool,
+      startedAt: sessionData.startedAt.toNumber(),
+      lastClaimedAt: sessionData.lastClaimedAt.toNumber(),
+      buyInPaid: sessionData.buyInPaid.toNumber(),
+      bump: sessionData.bump,
     };
   }
 
-  /**
-   * Calculate bet outcome based on accuracy
-   */
-  calculateBetOutcome(
-    predictedTime: number,
-    actualTime: number,
-    betAmount: number,
-    houseEdge: number
-  ): BetResult {
-    const diff = Math.abs(predictedTime - actualTime);
-    let outcome: BetOutcome;
-    let multiplier: number;
-
-    if (diff <= 100) {
-      outcome = BetOutcome.PERFECT;
-      multiplier = 10;
-    } else if (diff <= 500) {
-      outcome = BetOutcome.EXCELLENT;
-      multiplier = 5;
-    } else if (diff <= 1000) {
-      outcome = BetOutcome.GOOD;
-      multiplier = 2;
-    } else if (diff <= 2000) {
-      outcome = BetOutcome.BREAK_EVEN;
-      multiplier = 1;
-    } else {
-      outcome = BetOutcome.LOSS;
-      multiplier = 0;
-    }
-
-    const won = multiplier > 0;
-    const grossPayout = betAmount * multiplier;
-    const houseFee = (grossPayout * houseEdge) / 10000;
-    const payout = Math.max(0, grossPayout - houseFee);
-
-    return {
-      won,
-      payout,
-      outcome,
-      accuracy: diff,
-    };
+  estimatePayout(durationSeconds: number, payoutRateBaseUnitsPerSecond: number): number {
+    return Math.max(0, Math.floor(durationSeconds)) * payoutRateBaseUnitsPerSecond;
   }
 
-  /**
-   * Convert SOL to lamports
-   */
   solToLamports(sol: number): number {
     return sol * LAMPORTS_PER_SOL;
   }
 
-  /**
-   * Convert lamports to SOL
-   */
   lamportsToSol(lamports: number): number {
     return lamports / LAMPORTS_PER_SOL;
   }

@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint . --ext .ts,.tsx"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "0.32.1",
+    "@solana/web3.js": "^1.98.4",
     "@geometrydash/game-engine": "*",
     "next": "16.1.6",
     "react": "19.2.3",
