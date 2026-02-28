@@ -1,9 +1,23 @@
-[00:00:02.828] Server  LOG     ✓ Ready in 2.3s
-[00:00:08.268] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[00:00:12.354] Browser LOG     Game Over! Final score: 0
-[00:00:15.557] Browser LOG     Game Over! Final score: 0
-[00:00:25.634] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[00:00:26.160] Browser LOG     Game Over! Final score: 0
-[00:00:28.419] Browser LOG     Game Over! Final score: 0
-[00:00:31.964] Browser LOG     Game Over! Final score: 0
-[00:00:34.385] Browser LOG     Game Over! Final score: 0
+[00:00:00.836] Server  LOG     ✓ Ready in 601ms
+[00:00:01.252] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:00:09.151] Browser LOG     Game Over! Final score: 0
+[00:00:11.284] Browser LOG     Game Over! Final score: 0
+[00:00:13.367] Browser LOG     Game Over! Final score: 0
+[00:00:19.344] Browser LOG     Game Over! Final score: 0
+[00:00:21.427] Browser LOG     Game Over! Final score: 0
+[00:00:27.509] Browser LOG     Game Over! Final score: 0
+[00:00:39.785] Browser LOG     Game Over! Final score: 0
+[00:00:46.185] Browser LOG     Game Over! Final score: 0
+[00:02:13.436] Server  LOG     ✓ Compiled in 5ms
+[00:03:41.018] Server  LOG     ✓ Compiled in 342ms
+[00:03:44.452] Server  LOG     ✓ Compiled in 46ms
+[00:04:36.227] Browser LOG     Game Over! Final score: 0
+[00:04:45.157] Server  LOG     ✓ Compiled in 24ms
+[00:05:26.961] Browser LOG     Game Over! Final score: 0
+[00:05:31.911] Browser LOG     Game Over! Final score: 0
+[00:05:38.752] Browser LOG     Game Over! Final score: 0
+[00:06:20.619] Server  LOG     ✓ Compiled in 4ms
+[00:06:37.552] Browser LOG     Game Over! Final score: 0
+[00:06:42.177] Browser LOG     Game Over! Final score: 0
+[00:06:48.013] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:06:49.035] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold

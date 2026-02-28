@@ -9,7 +9,7 @@ export default function GamePage() {
           GEOMETRY DASH
         </h1>
         <p className="text-purple-300 text-lg font-mono">
-          A modular, ML-ready platformer clone
+          Simple to play, impossible to put down.
         </p>
       </div>
 
@@ -18,11 +18,7 @@ export default function GamePage() {
         <GeometryDashGame width={1200} height={600} />
       </div>
 
-      {/* Info */}
-      <div className="mt-8 text-center text-purple-400 text-sm font-mono">
-        <p>Built with modular architecture for ML integration</p>
-        <p className="mt-2">Assets from HackIllinois • Physics Engine • Canvas Renderer</p>
-      </div>
+
     </main>
   );
 }
