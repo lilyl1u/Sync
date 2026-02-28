@@ -22,9 +22,11 @@ import { RPC_URL } from '@/lib/solana';
 import { requestAndWaitFulfilled } from '@/lib/oraoVrf';
 
 import { detectBeats, DetectedBeat } from '../utils/beatDetector';
+import { playMidi, stopMidi, pauseMidi as pauseMidiPlayback, resumeMidi as resumeMidiPlayback } from '../utils/midiPlayer';
 
 const PLAYER_SPEED = 300;
 const AUDIO_URL = '/song/song.mp3';
+const LOFI_API = '/api/generate-lofi';
 
 interface GeometryDashGameProps {
   width?: number;
@@ -124,6 +126,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const audioStartedRef = useRef(false);
   const beatsRef = useRef<DetectedBeat[]>([]);
+  const midiBase64Ref = useRef<string | null>(null);
 
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isGameOver, setIsGameOver] = useState(false);
@@ -166,6 +169,25 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
     (async () => {
       try {
+        // Try Lofi API first (AI-generated beat track)
+        const lofiRes = await fetch(LOFI_API, { method: 'POST' });
+        if (cancelled) return;
+        if (lofiRes.ok) {
+          const data = await lofiRes.json();
+          const beats: DetectedBeat[] = (data.beats as number[]).map((time: number, i: number) => ({
+            time,
+            intensity: (data.intensities as number[])?.[i] ?? 0.5,
+          }));
+          if (beats.length > 0) {
+            beatsRef.current = beats;
+            midiBase64Ref.current = data.midiBase64 ?? null;
+            setAudioLoaded(true);
+            return;
+          }
+        }
+
+        // Fallback: static audio + beat detection
+        midiBase64Ref.current = null;
         const response = await fetch(AUDIO_URL);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const arrayBuffer = await response.arrayBuffer();
@@ -206,6 +228,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   // Audio playback helpers
   // ------------------------------------------------------------------
   const playAudio = useCallback(() => {
+    const midiB64 = midiBase64Ref.current;
+    if (midiB64) {
+      void playMidi(midiB64);
+      audioStartedRef.current = true;
+      return;
+    }
+
     const audioCtx = audioCtxRef.current;
     const buffer = audioBufferRef.current;
     if (!audioCtx || !buffer) return;
@@ -223,16 +252,29 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   }, []);
 
   const stopAudio = useCallback(() => {
+    if (midiBase64Ref.current) {
+      stopMidi();
+      audioStartedRef.current = false;
+      return;
+    }
     try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
     sourceNodeRef.current = null;
     audioStartedRef.current = false;
   }, []);
 
   const pauseAudio = useCallback(() => {
+    if (midiBase64Ref.current) {
+      pauseMidiPlayback();
+      return;
+    }
     audioCtxRef.current?.suspend();
   }, []);
 
   const resumeAudio = useCallback(() => {
+    if (midiBase64Ref.current) {
+      resumeMidiPlayback();
+      return;
+    }
     audioCtxRef.current?.resume();
   }, []);
 
