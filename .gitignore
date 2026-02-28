@@ -48,6 +48,8 @@ next-env.d.ts
 # Rust / Anchor / Solana
 target/
 **/target/
+*-keypair.json
+!packages/solana/.anchor/test-ledger/*-keypair.json
 
 # Node / Next
 node_modules/

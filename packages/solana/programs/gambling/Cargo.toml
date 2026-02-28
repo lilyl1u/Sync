@@ -15,6 +15,10 @@ no-log-ix-name = []
 cpi = ["no-entrypoint"]
 idl-build = ["anchor-lang/idl-build"]
 default = []
+# Silence check-cfg warnings from anchor-lang macros
+custom-heap = []
+custom-panic = []
+anchor-debug = []
 
 [dependencies]
 anchor-lang = "0.32.1"

@@ -7,6 +7,10 @@
     "packages/*"
   ],
   "scripts": {
+    "setup:anchor": "bash scripts/setup-anchor.sh",
+    "setup:gambling": "bash scripts/setup-gambling-anchor.sh",
+    "deploy:gambling": "bash scripts/deploy-gambling-devnet.sh",
+    "generate:pool-keypair": "bash scripts/generate-pool-authority-keypair.sh",
     "dev": "npm run dev --workspace=apps/web",
     "dev:web": "npm run dev --workspace=apps/web",
     "build": "npm run build --workspaces --if-present",

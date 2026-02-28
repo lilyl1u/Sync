@@ -1,0 +1,13 @@
+Streaming transaction logs mentioning 8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg. Confirmed commitment
+Transaction executed in slot 2:
+  Signature: 2E335Zcpwmq8BHJfQb7yp9F12MKkWi4v2iLiV5ijErxJa6cjDZ7PNThdy5HusUeusAA9xsjHnHpar814KjTQ7qEy
+  Status: Ok
+  Log Messages:
+    Program 8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg invoke [1]
+    Program log: Instruction: InitializePool
+    Program 11111111111111111111111111111111 invoke [2]
+    Program 11111111111111111111111111111111 success
+    Program 11111111111111111111111111111111 invoke [2]
+    Program 11111111111111111111111111111111 success
+    Program 8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg consumed 15545 of 200000 compute units
+    Program 8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg success
