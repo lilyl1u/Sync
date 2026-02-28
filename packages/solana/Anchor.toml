@@ -1,23 +1,24 @@
 [toolchain]
+anchor_version = "0.32.1"
 
 [features]
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-gambling = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
-
 [programs.devnet]
-gambling = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+gambling = "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg"
+
+[programs.localnet]
+gambling = "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg"
 
 [programs.mainnet]
-gambling = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+gambling = "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
@@ -25,3 +26,5 @@ test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 
 [test]
 startup_wait = 5000
+shutdown_wait = 2000
+upgradeable = false

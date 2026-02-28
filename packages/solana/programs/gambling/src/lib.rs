@@ -1,130 +1,106 @@
 use anchor_lang::prelude::*;
 
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg");
 
 #[program]
 pub mod gambling {
     use super::*;
 
-    /// Initialize a new gambling pool
+    /// Initialize a pool for the game economy.
+    /// `buy_in_base_units` and `payout_rate_base_units_per_second` are lamports.
     pub fn initialize_pool(
         ctx: Context<InitializePool>,
-        min_bet: u64,
-        max_bet: u64,
-        house_edge: u16, // in basis points (100 = 1%)
+        buy_in_base_units: u64,
+        payout_rate_base_units_per_second: u64,
     ) -> Result<()> {
         let pool = &mut ctx.accounts.pool;
         pool.authority = ctx.accounts.authority.key();
-        pool.min_bet = min_bet;
-        pool.max_bet = max_bet;
-        pool.house_edge = house_edge;
-        pool.total_wagered = 0;
-        pool.total_paid_out = 0;
-        pool.bump = ctx.bumps.pool;
+        pool.buy_in_base_units = buy_in_base_units;
+        pool.payout_rate_base_units_per_second = payout_rate_base_units_per_second;
+        pool.pool_bump = ctx.bumps.pool;
+        pool.vault_bump = ctx.bumps.vault;
+        pool.total_sessions_started = 0;
+        pool.total_buy_ins_collected = 0;
+        pool.total_payouts = 0;
+
+        let vault = &mut ctx.accounts.vault;
+        vault.reserved = 0;
         Ok(())
     }
 
-    /// Place a bet based on predicted survival time
-    pub fn place_bet(
-        ctx: Context<PlaceBet>,
-        bet_amount: u64,
-        predicted_time_alive: u64, // in milliseconds
-    ) -> Result<()> {
-        let pool = &ctx.accounts.pool;
+    /// Add liquidity to the vault so extract payouts can be paid.
+    pub fn fund_pool(ctx: Context<FundPool>, amount: u64) -> Result<()> {
+        require!(amount > 0, GamblingError::InvalidAmount);
 
-        require!(
-            bet_amount >= pool.min_bet && bet_amount <= pool.max_bet,
-            GamblingError::InvalidBetAmount
+        let transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.authority.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+            },
         );
+        anchor_lang::system_program::transfer(transfer_ctx, amount)?;
+        Ok(())
+    }
 
-        let bet = &mut ctx.accounts.bet;
-        bet.player = ctx.accounts.player.key();
-        bet.pool = pool.key();
-        bet.amount = bet_amount;
-        bet.predicted_time_alive = predicted_time_alive;
-        bet.actual_time_alive = 0;
-        bet.settled = false;
-        bet.won = false;
-        bet.payout = 0;
-        bet.timestamp = Clock::get()?.unix_timestamp;
-        bet.bump = ctx.bumps.bet;
+    /// Player pays buy-in and starts a live session.
+    pub fn start_session(ctx: Context<StartSession>) -> Result<()> {
+        let buy_in = ctx.accounts.pool.buy_in_base_units;
+        require!(buy_in > 0, GamblingError::InvalidAmount);
 
-        // Transfer bet amount from player to pool
-        let cpi_context = CpiContext::new(
+        let transfer_ctx = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
             anchor_lang::system_program::Transfer {
                 from: ctx.accounts.player.to_account_info(),
-                to: ctx.accounts.pool_vault.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
             },
         );
-        anchor_lang::system_program::transfer(cpi_context, bet_amount)?;
+        anchor_lang::system_program::transfer(transfer_ctx, buy_in)?;
 
+        let now = Clock::get()?.unix_timestamp;
+        let session = &mut ctx.accounts.session;
+        session.player = ctx.accounts.player.key();
+        session.pool = ctx.accounts.pool.key();
+        session.started_at = now;
+        session.last_claimed_at = now;
+        session.buy_in_paid = buy_in;
+        session.bump = ctx.bumps.session;
+
+        let pool = &mut ctx.accounts.pool;
+        pool.total_sessions_started = pool.total_sessions_started.saturating_add(1);
+        pool.total_buy_ins_collected = pool.total_buy_ins_collected.saturating_add(buy_in);
         Ok(())
     }
 
-    /// Settle a bet after game completion
-    pub fn settle_bet(
-        ctx: Context<SettleBet>,
-        actual_time_alive: u64,
-    ) -> Result<()> {
-        let bet = &mut ctx.accounts.bet;
+    /// Player extracts while alive; payout scales with survival time.
+    /// Session is closed after extracting.
+    pub fn extract(ctx: Context<Extract>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let session = &mut ctx.accounts.session;
+        let elapsed_seconds = elapsed_seconds(session.last_claimed_at, now)?;
 
-        require!(!bet.settled, GamblingError::BetAlreadySettled);
-        require!(bet.player == ctx.accounts.player.key(), GamblingError::UnauthorizedPlayer);
+        let winnings = elapsed_seconds
+            .checked_mul(ctx.accounts.pool.payout_rate_base_units_per_second)
+            .ok_or(GamblingError::MathOverflow)?;
+        let total_payout = session
+            .buy_in_paid
+            .checked_add(winnings)
+            .ok_or(GamblingError::MathOverflow)?;
 
-        bet.actual_time_alive = actual_time_alive;
-        bet.settled = true;
+        transfer_from_vault(
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.player.to_account_info(),
+            total_payout,
+        )?;
 
-        // Calculate payout based on accuracy
-        let prediction = bet.predicted_time_alive as i64;
-        let actual = actual_time_alive as i64;
-        let diff = (prediction - actual).abs() as u64;
+        let pool = &mut ctx.accounts.pool;
+        pool.total_payouts = pool.total_payouts.saturating_add(total_payout);
+        session.last_claimed_at = now;
+        Ok(())
+    }
 
-        // Accuracy-based payout: closer predictions get higher multipliers
-        // Perfect prediction (within 100ms): 10x
-        // Within 500ms: 5x
-        // Within 1000ms: 2x
-        // Beyond 2000ms: lose bet
-
-        let pool = &ctx.accounts.pool;
-        let multiplier = if diff <= 100 {
-            10000 // 10x
-        } else if diff <= 500 {
-            5000 // 5x
-        } else if diff <= 1000 {
-            2000 // 2x
-        } else if diff <= 2000 {
-            1000 // 1x (return bet)
-        } else {
-            0 // lose
-        };
-
-        if multiplier > 0 {
-            bet.won = true;
-            let gross_payout = (bet.amount as u128 * multiplier as u128 / 1000) as u64;
-            let house_fee = (gross_payout as u128 * pool.house_edge as u128 / 10000) as u64;
-            bet.payout = gross_payout.saturating_sub(house_fee);
-
-            // Transfer payout from pool to player
-            let pool_key = pool.key();
-            let seeds = &[
-                b"pool".as_ref(),
-                pool_key.as_ref(),
-                &[pool.bump],
-            ];
-            let signer = &[&seeds[..]];
-
-            let cpi_context = CpiContext::new_with_signer(
-                ctx.accounts.system_program.to_account_info(),
-                anchor_lang::system_program::Transfer {
-                    from: ctx.accounts.pool_vault.to_account_info(),
-                    to: ctx.accounts.player.to_account_info(),
-                },
-                signer,
-            );
-            anchor_lang::system_program::transfer(cpi_context, bet.payout)?;
-        }
-
+    /// Player died; session is closed and buy-in is forfeited.
+    pub fn record_death(_ctx: Context<RecordDeath>) -> Result<()> {
         Ok(())
     }
 }
@@ -140,102 +116,199 @@ pub struct InitializePool<'info> {
     )]
     pub pool: Account<'info, Pool>,
 
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + Vault::INIT_SPACE,
+        seeds = [b"vault", pool.key().as_ref()],
+        bump
+    )]
+    pub vault: Account<'info, Vault>,
+
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// CHECK: PDA vault for holding pool funds
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FundPool<'info> {
     #[account(
-        seeds = [b"pool", pool.key().as_ref()],
-        bump
+        seeds = [b"pool", authority.key().as_ref()],
+        bump = pool.pool_bump,
+        has_one = authority
     )]
-    pub pool_vault: AccountInfo<'info>,
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", pool.key().as_ref()],
+        bump = pool.vault_bump
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct PlaceBet<'info> {
+pub struct StartSession<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool", pool.authority.as_ref()],
+        bump = pool.pool_bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", pool.key().as_ref()],
+        bump = pool.vault_bump
+    )]
+    pub vault: Account<'info, Vault>,
+
     #[account(
         init,
         payer = player,
-        space = 8 + Bet::INIT_SPACE,
-        seeds = [b"bet", pool.key().as_ref(), player.key().as_ref()],
+        space = 8 + Session::INIT_SPACE,
+        seeds = [b"session", pool.key().as_ref(), player.key().as_ref()],
         bump
     )]
-    pub bet: Account<'info, Bet>,
-
-    #[account(mut)]
-    pub pool: Account<'info, Pool>,
+    pub session: Account<'info, Session>,
 
     #[account(mut)]
     pub player: Signer<'info>,
-
-    /// CHECK: PDA vault for holding pool funds
-    #[account(
-        mut,
-        seeds = [b"pool", pool.key().as_ref()],
-        bump
-    )]
-    pub pool_vault: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct SettleBet<'info> {
-    #[account(mut)]
-    pub bet: Account<'info, Bet>,
-
-    #[account(mut)]
+pub struct Extract<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool", pool.authority.as_ref()],
+        bump = pool.pool_bump
+    )]
     pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", pool.key().as_ref()],
+        bump = pool.vault_bump
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(
+        mut,
+        close = vault,
+        seeds = [b"session", pool.key().as_ref(), player.key().as_ref()],
+        bump = session.bump,
+        constraint = session.pool == pool.key() @ GamblingError::InvalidSessionPool,
+        constraint = session.player == player.key() @ GamblingError::UnauthorizedPlayer
+    )]
+    pub session: Account<'info, Session>,
 
     #[account(mut)]
     pub player: Signer<'info>,
+}
 
-    /// CHECK: PDA vault for holding pool funds
+#[derive(Accounts)]
+pub struct RecordDeath<'info> {
+    #[account(
+        seeds = [b"pool", pool.authority.as_ref()],
+        bump = pool.pool_bump
+    )]
+    pub pool: Account<'info, Pool>,
+
     #[account(
         mut,
-        seeds = [b"pool", pool.key().as_ref()],
-        bump
+        seeds = [b"vault", pool.key().as_ref()],
+        bump = pool.vault_bump
     )]
-    pub pool_vault: AccountInfo<'info>,
+    pub vault: Account<'info, Vault>,
 
-    pub system_program: Program<'info, System>,
+    #[account(
+        mut,
+        close = vault,
+        seeds = [b"session", pool.key().as_ref(), player.key().as_ref()],
+        bump = session.bump,
+        constraint = session.pool == pool.key() @ GamblingError::InvalidSessionPool,
+        constraint = session.player == player.key() @ GamblingError::UnauthorizedPlayer
+    )]
+    pub session: Account<'info, Session>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct Pool {
     pub authority: Pubkey,
-    pub min_bet: u64,
-    pub max_bet: u64,
-    pub house_edge: u16,
-    pub total_wagered: u64,
-    pub total_paid_out: u64,
-    pub bump: u8,
+    pub buy_in_base_units: u64,
+    pub payout_rate_base_units_per_second: u64,
+    pub pool_bump: u8,
+    pub vault_bump: u8,
+    pub total_sessions_started: u64,
+    pub total_buy_ins_collected: u64,
+    pub total_payouts: u64,
 }
 
 #[account]
 #[derive(InitSpace)]
-pub struct Bet {
+pub struct Vault {
+    pub reserved: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Session {
     pub player: Pubkey,
     pub pool: Pubkey,
-    pub amount: u64,
-    pub predicted_time_alive: u64,
-    pub actual_time_alive: u64,
-    pub settled: bool,
-    pub won: bool,
-    pub payout: u64,
-    pub timestamp: i64,
+    pub started_at: i64,
+    pub last_claimed_at: i64,
+    pub buy_in_paid: u64,
     pub bump: u8,
 }
 
 #[error_code]
 pub enum GamblingError {
-    #[msg("Invalid bet amount")]
-    InvalidBetAmount,
-    #[msg("Bet already settled")]
-    BetAlreadySettled,
+    #[msg("Invalid amount")]
+    InvalidAmount,
     #[msg("Unauthorized player")]
     UnauthorizedPlayer,
+    #[msg("Invalid session pool")]
+    InvalidSessionPool,
+    #[msg("Math overflow")]
+    MathOverflow,
+    #[msg("Clock moved backwards")]
+    ClockMovedBackwards,
+    #[msg("Vault has insufficient balance")]
+    VaultInsufficientBalance,
+}
+
+fn elapsed_seconds(from_ts: i64, to_ts: i64) -> Result<u64> {
+    require!(to_ts >= from_ts, GamblingError::ClockMovedBackwards);
+    Ok((to_ts - from_ts) as u64)
+}
+
+fn transfer_from_vault(vault: &AccountInfo, destination: &AccountInfo, amount: u64) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+
+    let rent = Rent::get()?;
+    let minimum_vault_balance = rent.minimum_balance(vault.data_len());
+    let current_vault_balance = vault.lamports();
+
+    require!(
+        current_vault_balance >= minimum_vault_balance.saturating_add(amount),
+        GamblingError::VaultInsufficientBalance
+    );
+
+    **vault.try_borrow_mut_lamports()? = current_vault_balance.saturating_sub(amount);
+    **destination.try_borrow_mut_lamports()? = destination.lamports().saturating_add(amount);
+    Ok(())
 }

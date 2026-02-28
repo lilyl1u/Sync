@@ -80,6 +80,7 @@ export interface GameState {
   currentLevel: Level;
   currentSegmentIndex: number;
   gameObjects: GameObject[];
+  elapsedTime: number;
   cameraOffset: number;
   isPaused: boolean;
   isGameOver: boolean;
