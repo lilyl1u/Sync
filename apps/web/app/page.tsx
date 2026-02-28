@@ -78,12 +78,20 @@ export default function Home() {
             One tap to jump, one mistake to restart. How far can you go?
           </p>
 
-          <Link
-            href="/game"
-            className="inline-block px-6 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white text-base font-bold rounded-full border-2 border-white hover:from-purple-500 hover:to-pink-500 transition-all duration-300 shadow-xl shadow-purple-500/40 hover:shadow-purple-500/60 hover:scale-105"
-          >
-            PLAY NOW <span className="ml-2">→</span>
-          </Link>
+          <div className="flex flex-wrap gap-4 justify-center md:justify-start">
+            <Link
+              href="/game"
+              className="inline-block px-6 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white text-base font-bold rounded-full border-2 border-white hover:from-purple-500 hover:to-pink-500 transition-all duration-300 shadow-xl shadow-purple-500/40 hover:shadow-purple-500/60 hover:scale-105"
+            >
+              PLAY NOW <span className="ml-2">→</span>
+            </Link>
+            <Link
+              href="/duels"
+              className="inline-block px-6 py-2.5 bg-white/10 text-white text-base font-bold rounded-full border-2 border-purple-400/60 hover:bg-white/20 hover:border-purple-400 transition-all duration-300"
+            >
+              Duels 1v1
+            </Link>
+          </div>
 
         </div>
 
