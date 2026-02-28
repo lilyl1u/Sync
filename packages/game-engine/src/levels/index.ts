@@ -113,6 +113,20 @@ export function generateLevel(
 }
 
 /**
+ * Convenience helper used by the web app: create a long,
+ * procedurally generated "infinite feeling" level.
+ */
+export function createInfiniteLevel(): Level {
+  const generator = new LevelGenerator();
+  return generator.generate({
+    difficulty: 0.5,
+    length: 5000,
+    seed: Date.now(),
+    style: 'classic',
+  });
+}
+
+/**
  * Generate a level with ML if model is provided
  */
 export function generateLevelWithML(
