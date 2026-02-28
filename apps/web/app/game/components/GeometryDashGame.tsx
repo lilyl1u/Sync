@@ -19,6 +19,7 @@ import {
   type PoolConfig,
 } from '@/lib/gamblingClient';
 import { RPC_URL } from '@/lib/solana';
+import { requestAndWaitFulfilled } from '@/lib/oraoVrf';
 
 import { detectBeats, DetectedBeat } from '../utils/beatDetector';
 
@@ -144,10 +145,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const [displayElapsedFallback, setDisplayElapsedFallback] = useState(0);
   const [poolConfig, setPoolConfig] = useState<PoolConfig | null>(null);
   const [frozenEarned, setFrozenEarned] = useState<bigint | null>(null);
+  const [terrainSeed, setTerrainSeed] = useState<number | null>(null);
+  const [vrfRequestTx, setVrfRequestTx] = useState<string | null>(null);
+  const [isRequestingVrf, setIsRequestingVrf] = useState(false);
   const sessionStartRef = useRef<number | null>(null);
 
   // ------------------------------------------------------------------
-  // Load & analyse audio on mount, then build the level
+  // Load & analyse audio on mount (level/engine created on Pay & Start after VRF)
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -161,8 +165,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     rendererRef.current = renderer;
 
     (async () => {
-      let level;
-
       try {
         const response = await fetch(AUDIO_URL);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -179,36 +181,12 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         const beats = await detectBeats(audioBuffer);
         beatsRef.current = beats;
 
-        level = createBeatLevel({
-          beats: beats.map((b) => b.time),
-          playerSpeed: PLAYER_SPEED,
-          intensities: beats.map((b) => b.intensity),
-        });
-
         setAudioLoaded(true);
       } catch {
-        level = createInfiniteLevel();
         setAudioError(true);
       } finally {
         setLoadingAudio(false);
       }
-
-      if (cancelled) return;
-
-      const engine = new GameEngine(level, {
-        canvasWidth: width,
-        canvasHeight: height,
-        playerSpeed: PLAYER_SPEED,
-      });
-
-      engine.onRender((state) => renderer.render(state));
-      engine.onGameOver(() => {
-        setIsGameOver(true);
-        stopAudio();
-      });
-
-      renderer.render(engine.getState());
-      engineRef.current = engine;
     })();
 
     return () => {
@@ -222,7 +200,6 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       }
       audioCtxRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [width, height]);
 
   // ------------------------------------------------------------------
@@ -372,9 +349,44 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     catch (error) { setErrorMessage(error instanceof Error ? error.message : 'Connection failed'); }
   }, [connectWallet]);
 
+  const buildLevelAndEngine = useCallback(
+    (seed: number) => {
+      const renderer = rendererRef.current;
+      if (!renderer) return null;
+
+      let level;
+      if (audioError || !beatsRef.current.length) {
+        level = createInfiniteLevel();
+      } else {
+        level = createBeatLevel({
+          beats: beatsRef.current.map((b) => b.time),
+          playerSpeed: PLAYER_SPEED,
+          intensities: beatsRef.current.map((b) => b.intensity),
+          seed,
+        });
+      }
+
+      const engine = new GameEngine(level, {
+        canvasWidth: width,
+        canvasHeight: height,
+        playerSpeed: PLAYER_SPEED,
+        initialChunkSeed: seed,
+      });
+
+      engine.onRender((state) => renderer.render(state));
+      engine.onGameOver(() => {
+        setIsGameOver(true);
+        stopAudio();
+      });
+
+      renderer.render(engine.getState());
+      return engine;
+    },
+    [audioError, width, height, stopAudio],
+  );
+
   const handlePayAndStart = useCallback(async () => {
-    const engine = engineRef.current;
-    if (!engine || hasStarted || !walletAddress) return;
+    if (hasStarted || !walletAddress) return;
     const provider = getPhantomProvider();
     if (!provider?.publicKey) {
       setErrorMessage('Wallet disconnected. Please connect again.');
@@ -382,11 +394,32 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       return;
     }
     setErrorMessage(null);
-    setStatusMessage('Submitting on-chain start transaction...');
     setIsPayingBuyIn(true);
+
     try {
       if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
-      const signature = await startSessionOnChain({ connection: connectionRef.current, wallet: provider });
+
+      let engine = engineRef.current;
+
+      if (!engine) {
+        setIsRequestingVrf(true);
+        setStatusMessage('Requesting verified randomness...');
+        const vrfResult = await requestAndWaitFulfilled(connectionRef.current, provider);
+        setTerrainSeed(vrfResult.seed);
+        setVrfRequestTx(vrfResult.requestTx);
+
+        const newEngine = buildLevelAndEngine(vrfResult.seed);
+        if (!newEngine) throw new Error('Failed to build level');
+        engineRef.current = newEngine;
+        engine = newEngine;
+        setIsRequestingVrf(false);
+      }
+
+      setStatusMessage('Submitting on-chain start transaction...');
+      const signature = await startSessionOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+      });
       setBuyInSignature(signature);
       setStatusMessage('Waiting for on-chain confirmation...');
       await connectionRef.current.confirmTransaction(signature, 'confirmed');
@@ -408,12 +441,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       gameContainerRef.current?.focus();
       if (audioLoaded) playAudio();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Buy-in failed');
+      setIsRequestingVrf(false);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to start');
       setStatusMessage(null);
     } finally {
       setIsPayingBuyIn(false);
     }
-  }, [hasStarted, walletAddress, audioLoaded, playAudio]);
+  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine]);
 
   const FEE_BUFFER_LAMPORTS = 300_000n;
 
@@ -481,26 +515,25 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     stopAudio();
     frozenEarnedRef.current = null;
     const engine = engineRef.current;
-    const renderer = rendererRef.current;
     if (engine) {
-      engine.stop();
-      engine.restart();
-      const state = engine.getState();
-      setGameState(state);
-      if (renderer) renderer.render(state);
-      setIsGameOver(false);
-      setHasExtracted(false);
-      setHasStarted(false);
-      setBuyInSignature(null);
-      setSettleSignature(null);
-      setFrozenEarned(null);
-      setPoolConfig(null);
-      setStatusMessage(null);
-      setErrorMessage(null);
-      setDisplayElapsedFallback(0);
-      hasSettledCurrentRunRef.current = false;
-      gameContainerRef.current?.focus();
+      engine.destroy();
+      engineRef.current = null;
     }
+    setGameState(null);
+    setIsGameOver(false);
+    setHasExtracted(false);
+    setHasStarted(false);
+    setBuyInSignature(null);
+    setSettleSignature(null);
+    setFrozenEarned(null);
+    setPoolConfig(null);
+    setTerrainSeed(null);
+    setVrfRequestTx(null);
+    setStatusMessage(null);
+    setErrorMessage(null);
+    setDisplayElapsedFallback(0);
+    hasSettledCurrentRunRef.current = false;
+    gameContainerRef.current?.focus();
   }, [cancelExtractHold, stopAudio]);
 
   useEffect(() => {
@@ -611,10 +644,14 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
               ) : (
                 <button
                   onClick={() => void handlePayAndStart()}
-                  disabled={isPayingBuyIn || loadingAudio}
+                  disabled={isPayingBuyIn || isRequestingVrf || loadingAudio}
                   className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {isPayingBuyIn ? 'Confirm in Phantom...' : 'Pay Buy-In & Start'}
+                  {isRequestingVrf
+                    ? 'Requesting VRF...'
+                    : isPayingBuyIn
+                      ? 'Confirm in Phantom...'
+                      : 'Pay Buy-In & Start'}
                 </button>
               )}
             </div>
@@ -655,6 +692,21 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
               {walletBalanceLamports !== null && (
                 <div className="text-emerald-400 font-semibold">Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
               )}
+              {terrainSeed !== null && (
+                <div className="text-cyan-300/90">
+                  Terrain seed: 0x{terrainSeed.toString(16).toUpperCase().padStart(8, '0')}
+                </div>
+              )}
+              {vrfRequestTx && (
+                <a
+                  href={`https://solscan.io/tx/${vrfRequestTx}${RPC_URL.includes('devnet') ? '?cluster=devnet' : ''}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-400 hover:text-cyan-300 underline block pointer-events-auto"
+                >
+                  Verified by ORAO VRF
+                </a>
+              )}
               {statusMessage && <div className="text-cyan-300">{statusMessage}</div>}
               {errorMessage && <div className="text-red-300">{errorMessage}</div>}
             </div>
@@ -693,6 +745,16 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                   <div className="text-purple-200/80 text-sm">
                     Confirm in Phantom to receive this amount.
                   </div>
+                  {vrfRequestTx && (
+                    <a
+                      href={`https://solscan.io/tx/${vrfRequestTx}${RPC_URL.includes('devnet') ? '?cluster=devnet' : ''}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-4 inline-block text-cyan-400 hover:text-cyan-300 text-sm font-mono underline"
+                    >
+                      Terrain verified by ORAO VRF
+                    </a>
+                  )}
                 </div>
                 <div className="flex flex-col gap-3">
                   <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg">

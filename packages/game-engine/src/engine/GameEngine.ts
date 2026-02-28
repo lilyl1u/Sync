@@ -10,6 +10,8 @@ export interface GameEngineConfig {
   canvasHeight: number;
   playerSpeed: number; // Auto-run speed
   physicsConfig?: Partial<PhysicsConfig>;
+  /** Initial seed for procedural chunk generation (VRF-verified terrain) */
+  initialChunkSeed?: number;
 }
 
 export class GameEngine {
@@ -37,6 +39,7 @@ export class GameEngine {
     this.config = config;
     this.physicsEngine = new PhysicsEngine(config.physicsConfig);
     this.inputHandler = new InputHandler();
+    this.chunkSeed = config.initialChunkSeed ?? 1;
 
     // Initialize game state
     this.gameState = this.createInitialState(initialLevel);
@@ -76,7 +79,6 @@ export class GameEngine {
       isPaused: false,
       isGameOver: false,
       score: 0,
-      elapsedTime: 0,
     };
   }
 
@@ -172,7 +174,7 @@ export class GameEngine {
     this.gameState.elapsedTime += deltaTime;
 
     // Update player physics
-    const platforms = this.gameState.gameObjects.filter(
+    const levelPlatforms = this.gameState.gameObjects.filter(
       (obj) => obj.type === GameObjectType.PLATFORM && obj.active
     );
 
