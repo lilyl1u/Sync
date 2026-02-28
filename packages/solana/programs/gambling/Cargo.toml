@@ -1,0 +1,24 @@
+[package]
+name = "gambling"
+version = "0.1.0"
+description = "Time-alive gambling mechanics for Geometry Dash"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "gambling"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+
+[dev-dependencies]
+solana-program-test = "~1.18.0"
+solana-sdk = "~1.18.0"

@@ -1,0 +1,17 @@
+{
+  "name": "@geometrydash/shared-types",
+  "version": "0.1.0",
+  "description": "Shared TypeScript types for Geometry Dash monorepo",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "types",
+    "typescript",
+    "shared"
+  ],
+  "author": "",
+  "license": "MIT"
+}
