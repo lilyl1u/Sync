@@ -1,5 +1,13 @@
 # Sync
 
+## To run: 
+
+1. Install dependencies
+```npm install```
+2. Start the dev server
+```npm run dev```
+
+
 ## Features
 
 ### Game Engine
