@@ -1,4 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
+import gamblingIdlJson from "./gambling-idl.json";
 
 export const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
@@ -9,7 +10,9 @@ const poolAuthorityPubkeyValue =
 
 const gamblingProgramIdValue =
   process.env.NEXT_PUBLIC_GAMBLING_PROGRAM_ID ??
-  "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg";
+  (gamblingIdlJson as { address?: string; metadata?: { address?: string } }).address ??
+  (gamblingIdlJson as { metadata?: { address?: string } }).metadata?.address ??
+  "FAdRVYXxpjaacwU1MNcNf9yayhkCNJdyRyoJNcMKbrnB";
 
 export const BUYIN_BASE_UNITS = BigInt(
   process.env.NEXT_PUBLIC_BUYIN_BASE_UNITS ?? "5000000",

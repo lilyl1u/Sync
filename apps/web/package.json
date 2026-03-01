@@ -12,6 +12,7 @@
     "@coral-xyz/anchor": "0.32.1",
     "@geometrydash/game-engine": "*",
     "@orao-network/solana-vrf": "^0.8.0",
+    "@privy-io/react-auth": "^2.25.0",
     "@solana/web3.js": "^1.98.4",
     "@tonejs/midi": "^2.0.28",
     "firebase": "^12.10.0",

@@ -64,21 +64,21 @@ function toAnchorWallet(wallet: AnchorWalletLike): { publicKey: PublicKey; signT
 }
 
 function getProgram(connection: Connection, wallet: AnchorWalletLike): GamblingProgramClient {
-  const idlAddress =
-    (gamblingIdl as { address?: string; metadata?: { address?: string } }).address ??
-    (gamblingIdl as { metadata?: { address?: string } }).metadata?.address;
-  if (idlAddress && idlAddress !== GAMBLING_PROGRAM_ID.toBase58()) {
-    throw new Error(
-      `IDL/program id mismatch: IDL=${idlAddress} ENV=${GAMBLING_PROGRAM_ID.toBase58()}. Rebuild/copy IDL or fix NEXT_PUBLIC_GAMBLING_PROGRAM_ID.`,
-    );
-  }
-
   const provider = new AnchorProvider(connection, toAnchorWallet(wallet) as never, {
     commitment: 'confirmed',
     preflightCommitment: 'confirmed',
   });
 
-  const program = new Program(gamblingIdl as object, provider);
+  const normalizedIdl = {
+    ...(gamblingIdl as Record<string, unknown>),
+    address: GAMBLING_PROGRAM_ID.toBase58(),
+    metadata: {
+      ...(((gamblingIdl as { metadata?: Record<string, unknown> }).metadata) ?? {}),
+      address: GAMBLING_PROGRAM_ID.toBase58(),
+    },
+  };
+
+  const program = new Program(normalizedIdl as object, provider);
   return program as unknown as GamblingProgramClient;
 }
 

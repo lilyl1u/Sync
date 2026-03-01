@@ -2,8 +2,15 @@
   "name": "@geometrydash/game-engine",
   "version": "0.1.0",
   "description": "Reusable Geometry Dash game engine",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",

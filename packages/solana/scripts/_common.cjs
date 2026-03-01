@@ -23,11 +23,20 @@ function parseU64String(raw, fieldName) {
 }
 
 function loadIdl() {
-  const idlPath = path.resolve(__dirname, '../target/idl/gambling.json');
-  if (!fs.existsSync(idlPath)) {
-    throw new Error(`IDL not found at ${idlPath}. Run \`anchor build\` first.`);
+  const candidatePaths = [
+    path.resolve(__dirname, '../target/idl/gambling.json'),
+    path.resolve(__dirname, '../../../apps/web/lib/gambling-idl.json'),
+  ];
+
+  for (const idlPath of candidatePaths) {
+    if (fs.existsSync(idlPath)) {
+      return JSON.parse(fs.readFileSync(idlPath, 'utf8'));
+    }
   }
-  return JSON.parse(fs.readFileSync(idlPath, 'utf8'));
+
+  throw new Error(
+    `IDL not found. Checked: ${candidatePaths.join(', ')}. Run \`anchor build\` or copy IDL to apps/web/lib/gambling-idl.json.`,
+  );
 }
 
 function loadWalletKeypair() {

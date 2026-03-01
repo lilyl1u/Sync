@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useModalStatus, usePrivy, useWallets, useSolanaWallets } from '@privy-io/react-auth';
+import type { ConnectedSolanaWallet } from '@privy-io/react-auth';
 import {
   GameEngine,
   Renderer,
@@ -42,6 +44,20 @@ type PhantomProvider = {
   isPhantom?: boolean;
 };
 
+type WalletAdapterLike = {
+  publicKey: PublicKey | null;
+  signTransaction: (transaction: Transaction) => Promise<Transaction>;
+  signAllTransactions?: (transactions: Transaction[]) => Promise<Transaction[]>;
+  connect?: (options?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey: PublicKey }>;
+  disconnect?: () => Promise<void>;
+};
+
+type PrivySolanaWallet = {
+  address: string;
+  signTransaction: (transaction: Transaction) => Promise<Transaction>;
+  signAllTransactions?: (transactions: Transaction[]) => Promise<Transaction[]>;
+};
+
 declare global {
   interface Window {
     phantom?: {
@@ -62,6 +78,14 @@ function getPhantomProvider(): PhantomProvider | null {
   }
 
   return provider;
+}
+
+function toWalletAdapter(wallet: PrivySolanaWallet): WalletAdapterLike {
+  return {
+    publicKey: new PublicKey(wallet.address),
+    signTransaction: wallet.signTransaction,
+    signAllTransactions: wallet.signAllTransactions,
+  };
 }
 
 function formatSessionTime(seconds: number): string {
@@ -94,6 +118,13 @@ function formatSolBalance(lamports: number): string {
 
 const E_HOLD_DURATION_MS = 3000;
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
+}
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -110,12 +141,28 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMes
 }
 
 export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGameProps) {
+  const {
+    ready: isPrivyReady,
+    authenticated: isPrivyAuthenticated,
+    login: privyLogin,
+  } = usePrivy();
+  const { isOpen: isPrivyModalOpen } = useModalStatus();
+  const { wallets: privyWallets } = useWallets();
+  const {
+    wallets: solanaWallets,
+    ready: solanaWalletsReady,
+    createWallet: createSolanaWallet,
+  } = useSolanaWallets();
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const hasSettledCurrentRunRef = useRef(false);
   const connectionRef = useRef<Connection | null>(null);
+  const activeWalletRef = useRef<WalletAdapterLike | null>(null);
+  const solanaWalletsRef = useRef<ConnectedSolanaWallet[]>(solanaWallets);
+  const isPrivyAuthenticatedRef = useRef(isPrivyAuthenticated);
   const eHoldStartRef = useRef<number | null>(null);
   const eHoldRafRef = useRef<number | null>(null);
   const eHoldTriggeredRef = useRef(false);
@@ -136,7 +183,10 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const [audioError, setAudioError] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(true);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletProviderName, setWalletProviderName] = useState<'phantom' | 'privy' | null>(null);
   const [isWalletConnecting, setIsWalletConnecting] = useState(false);
+  const [walletConnectTarget, setWalletConnectTarget] = useState<'phantom' | 'privy' | null>(null);
+  const [autoStartAfterPrivyConnect, setAutoStartAfterPrivyConnect] = useState(false);
   const [isPayingBuyIn, setIsPayingBuyIn] = useState(false);
   const [isSettling, setIsSettling] = useState(false);
   const [buyInSignature, setBuyInSignature] = useState<string | null>(null);
@@ -152,6 +202,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const [vrfRequestTx, setVrfRequestTx] = useState<string | null>(null);
   const [isRequestingVrf, setIsRequestingVrf] = useState(false);
   const sessionStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    solanaWalletsRef.current = solanaWallets;
+  }, [solanaWallets]);
+  useEffect(() => {
+    isPrivyAuthenticatedRef.current = isPrivyAuthenticated;
+  }, [isPrivyAuthenticated]);
 
   // ------------------------------------------------------------------
   // Load & analyse audio on mount (level/engine created on Pay & Start after VRF)
@@ -328,29 +385,121 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   // ------------------------------------------------------------------
   // Game lifecycle callbacks
   // ------------------------------------------------------------------
-  const connectWallet = useCallback(async (): Promise<PhantomProvider> => {
-    const provider = getPhantomProvider();
-    if (!provider) throw new Error('Phantom wallet not found. Install Phantom and try again.');
+  const connectWallet = useCallback(async (target: 'phantom' | 'privy'): Promise<WalletAdapterLike> => {
     setIsWalletConnecting(true);
+    setWalletConnectTarget(target);
     setErrorMessage(null);
-    setStatusMessage('Open Phantom to approve the connection...');
     try {
-      const response = await withTimeout(
-        provider.connect({ onlyIfTrusted: false }),
-        60000,
-        'Wallet connection timed out.',
-      );
-      setWalletAddress(response.publicKey.toBase58());
+      let connectedWallet: WalletAdapterLike;
+
+      if (target === 'phantom') {
+        const provider = getPhantomProvider();
+        if (!provider) throw new Error('Phantom wallet not found. Install Phantom and try again.');
+        setStatusMessage('Open Phantom to approve the connection...');
+        const response = await withTimeout(
+          provider.connect({ onlyIfTrusted: false }),
+          60000,
+          'Wallet connection timed out.',
+        );
+        connectedWallet = provider;
+        setWalletAddress(response.publicKey.toBase58());
+        setWalletProviderName('phantom');
+      } else {
+        if (!isPrivyReady) {
+          throw new Error('Privy is still loading. Please try again.');
+        }
+        const getEmbeddedSolanaWallet = (): ConnectedSolanaWallet | undefined =>
+          solanaWalletsRef.current.find(
+            (w) => w.walletClientType === 'privy' || w.walletClientType === 'privy-v2',
+          );
+        if (!isPrivyAuthenticated) {
+          setStatusMessage('Open Privy and sign in with your email code...');
+          privyLogin({ loginMethods: ['email'], walletChainType: 'solana-only' });
+          await withTimeout(
+            new Promise<void>((resolve) => {
+              const poll = () => {
+                if (isPrivyAuthenticatedRef.current) {
+                  resolve();
+                  return;
+                }
+                setTimeout(poll, 250);
+              };
+              poll();
+            }),
+            60000,
+            'Email sign-in timed out. Please try again.',
+          );
+        }
+        let embeddedWallet = getEmbeddedSolanaWallet();
+        if (!embeddedWallet) {
+          setStatusMessage('Creating your Solana wallet...');
+          await withTimeout(
+            new Promise<void>((resolve) => {
+              const poll = () => {
+                if (solanaWalletsRef.current.length > 0 && getEmbeddedSolanaWallet()) {
+                  resolve();
+                  return;
+                }
+                setTimeout(poll, 250);
+              };
+              poll();
+            }),
+            15000,
+            'Waiting for Solana wallet.',
+          );
+          embeddedWallet = getEmbeddedSolanaWallet();
+        }
+        if (!embeddedWallet) {
+          try {
+            await createSolanaWallet();
+          } catch {
+            // Wallet may already exist and appear on next tick
+          }
+          await withTimeout(
+            new Promise<void>((resolve) => {
+              const poll = () => {
+                if (getEmbeddedSolanaWallet()) {
+                  resolve();
+                  return;
+                }
+                setTimeout(poll, 250);
+              };
+              poll();
+            }),
+            20000,
+            'Privy Solana wallet was not created. Enable Solana embedded wallets in the Privy dashboard and try again.',
+          );
+          embeddedWallet = getEmbeddedSolanaWallet();
+        }
+        if (!embeddedWallet) {
+          throw new Error(
+            'Privy login succeeded but no Solana embedded wallet was found. Enable Solana embedded wallets in the Privy dashboard.',
+          );
+        }
+        connectedWallet = toWalletAdapter(embeddedWallet as unknown as PrivySolanaWallet);
+        if (!connectedWallet.publicKey) {
+          throw new Error('Privy wallet is not connected.');
+        }
+        setWalletAddress(connectedWallet.publicKey.toBase58());
+        setWalletProviderName('privy');
+      }
+
+      activeWalletRef.current = connectedWallet;
       if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
       setStatusMessage('Wallet connected. Click Pay Buy-In & Start to begin.');
-      return provider;
+      return connectedWallet;
     } catch (err) {
+      if (!walletAddress) {
+        activeWalletRef.current = null;
+        setWalletProviderName(null);
+      }
       setStatusMessage(null);
       throw err;
     } finally {
       setIsWalletConnecting(false);
+      setWalletConnectTarget(null);
     }
-  }, []);
+  }, [isPrivyAuthenticated, isPrivyReady, createSolanaWallet, privyLogin, walletAddress]);
 
   const doExtract = useCallback(
     async (earned: bigint): Promise<boolean> => {
@@ -358,10 +507,10 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       hasSettledCurrentRunRef.current = true;
       setIsSettling(true);
       setErrorMessage(null);
-      setStatusMessage('Extracting – confirm in Phantom...');
+      setStatusMessage(`Extracting – confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`);
 
       try {
-        const walletProvider = getPhantomProvider();
+        const walletProvider = activeWalletRef.current;
         if (!walletProvider?.publicKey) throw new Error('Wallet is not connected');
         if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
 
@@ -383,12 +532,19 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         setIsSettling(false);
       }
     },
-    [walletAddress],
+    [walletAddress, walletProviderName],
   );
 
-  const handleConnectWallet = useCallback(async () => {
-    try { await connectWallet(); }
-    catch (error) { setErrorMessage(error instanceof Error ? error.message : 'Connection failed'); }
+  const handleConnectWallet = useCallback(async (target: 'phantom' | 'privy') => {
+    if (target === 'privy') {
+      setAutoStartAfterPrivyConnect(true);
+    }
+    try {
+      await connectWallet(target);
+    } catch (error) {
+      setAutoStartAfterPrivyConnect(false);
+      setErrorMessage(error instanceof Error ? error.message : 'Connection failed');
+    }
   }, [connectWallet]);
 
   const buildLevelAndEngine = useCallback(
@@ -429,10 +585,12 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
   const handlePayAndStart = useCallback(async () => {
     if (hasStarted || !walletAddress) return;
-    const provider = getPhantomProvider();
+    const provider = activeWalletRef.current;
     if (!provider?.publicKey) {
       setErrorMessage('Wallet disconnected. Please connect again.');
       setWalletAddress(null);
+      setWalletProviderName(null);
+      activeWalletRef.current = null;
       return;
     }
     setErrorMessage(null);
@@ -490,6 +648,24 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       setIsPayingBuyIn(false);
     }
   }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine]);
+
+  useEffect(() => {
+    if (!autoStartAfterPrivyConnect) return;
+    if (!walletAddress || hasStarted || loadingAudio || isWalletConnecting || isPayingBuyIn || isRequestingVrf) return;
+
+    setAutoStartAfterPrivyConnect(false);
+    setStatusMessage('Privy connected. Starting game...');
+    void handlePayAndStart();
+  }, [
+    autoStartAfterPrivyConnect,
+    walletAddress,
+    hasStarted,
+    loadingAudio,
+    isWalletConnecting,
+    isPayingBuyIn,
+    isRequestingVrf,
+    handlePayAndStart,
+  ]);
 
   const FEE_BUFFER_LAMPORTS = 300_000n;
 
@@ -587,11 +763,12 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   // ------------------------------------------------------------------
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
       if (e.key === 'r' || e.key === 'R') { handleRestart(); return; }
       if (e.key === 'Enter' && !hasStarted && !loadingAudio) {
         e.preventDefault();
         if (walletAddress) void handlePayAndStart();
-        else void handleConnectWallet();
+        else void handleConnectWallet('phantom');
       }
       if ((e.key === 'e' || e.key === 'E') && !e.repeat && !loadingAudio) {
         e.preventDefault();
@@ -599,6 +776,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
       if ((e.key === 'e' || e.key === 'E') && !eHoldTriggeredRef.current) cancelExtractHold();
     };
     window.addEventListener('keydown', handleKeyPress);
@@ -619,6 +797,9 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
 
   const ratePerSec = poolConfig?.payoutRateBaseUnitsPerSecond
     ?? BigInt(process.env.NEXT_PUBLIC_PAYOUT_RATE_BASE_UNITS_PER_SECOND ?? '100000');
+  const embeddedPrivyWallet = solanaWallets.find(
+    (w) => w.walletClientType === 'privy' || w.walletClientType === 'privy-v2',
+  );
 
   // ------------------------------------------------------------------
   // Render
@@ -676,13 +857,24 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               {!walletAddress ? (
-                <button
-                  onClick={() => void handleConnectWallet()}
-                  disabled={isWalletConnecting || loadingAudio}
-                  className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isWalletConnecting ? 'Connecting... (check Phantom)' : 'Connect Wallet'}
-                </button>
+                <>
+                  <button
+                    onClick={() => void handleConnectWallet('phantom')}
+                    disabled={isWalletConnecting || loadingAudio}
+                    className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
+                  </button>
+                  <button
+                    onClick={() => void handleConnectWallet('privy')}
+                    disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
+                    className="px-8 py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-lg hover:from-cyan-500 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/30 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isWalletConnecting && walletConnectTarget === 'privy'
+                      ? 'Signing in with email...'
+                      : 'Use Email (Privy)'}
+                  </button>
+                </>
               ) : (
                 <button
                   onClick={() => void handlePayAndStart()}
@@ -692,7 +884,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                   {isRequestingVrf
                     ? 'Requesting VRF...'
                     : isPayingBuyIn
-                      ? 'Confirm in Phantom...'
+                      ? `Confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`
                       : 'Pay Buy-In & Start'}
                 </button>
               )}
@@ -731,6 +923,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
           <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-4 py-3 rounded-lg border border-purple-500/30 max-w-[30rem]">
             <div className="text-xs text-purple-200 font-mono space-y-1">
               <div>Wallet: {walletAddress ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}` : 'Not connected'}</div>
+              {walletProviderName && <div>Provider: {walletProviderName === 'privy' ? 'Privy (Embedded)' : 'Phantom'}</div>}
               {walletBalanceLamports !== null && (
                 <div className="text-emerald-400 font-semibold">Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
               )}
@@ -785,7 +978,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                     You earned {formatSol(frozenEarned)} SOL
                   </div>
                   <div className="text-purple-200/80 text-sm">
-                    Confirm in Phantom to receive this amount.
+                    Confirm in {walletProviderName === 'privy' ? 'Privy' : 'Phantom'} to receive this amount.
                   </div>
                   {vrfRequestTx && (
                     <a
@@ -840,6 +1033,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
           )}
         </div>
       )}
+
     </div>
   );
 }

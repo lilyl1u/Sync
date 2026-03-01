@@ -85,7 +85,6 @@ export interface GameState {
   isPaused: boolean;
   isGameOver: boolean;
   score: number;
-  elapsedTime: number; // Seconds since game start (resets on restart)
 }
 
 // Physics configuration
