@@ -2,6 +2,7 @@
 
 import { PrivyProvider, type PrivyClientConfig } from '@privy-io/react-auth';
 import { useEffect, useState, type ReactNode } from 'react';
+import { PrivyGlobalLogoutButton } from './components/PrivyGlobalLogoutButton';
 
 type ProvidersProps = {
   children: ReactNode;
@@ -49,6 +50,7 @@ export function Providers({ children }: ProvidersProps) {
       config={privyConfig}
     >
       {children}
+      <PrivyGlobalLogoutButton />
     </PrivyProvider>
   );
 }

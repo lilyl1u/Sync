@@ -1186,6 +1186,18 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     if (hasExtracted) cancelExtractHold();
   }, [cancelExtractHold, hasExtracted]);
 
+  useEffect(() => {
+    const gameplayActive = hasStarted && !isGameOver && !hasExtracted;
+    window.dispatchEvent(
+      new CustomEvent('geometrydash:gameplay-state', { detail: { active: gameplayActive } }),
+    );
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent('geometrydash:gameplay-state', { detail: { active: false } }),
+      );
+    };
+  }, [hasStarted, isGameOver, hasExtracted]);
+
   // ------------------------------------------------------------------
   // Keyboard shortcuts
   // ------------------------------------------------------------------
