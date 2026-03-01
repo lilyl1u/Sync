@@ -229,78 +229,58 @@ export default function LofiPage() {
     }
   }, [state.midiBase64, handleStop, startBgMp4]);
 
+  const cardClass = 'w-full max-w-[520px] rounded-xl border border-[var(--arcade-border)] border-t-2 border-t-[var(--arcade-cyan)] p-6 bg-[var(--arcade-glass)] backdrop-blur-xl';
+  const btnClass = 'px-4 py-2 rounded-lg text-sm font-medium border border-[var(--arcade-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--arcade-cyan)] hover:bg-[rgba(0,255,255,0.25)] disabled:opacity-60 disabled:cursor-not-allowed transition-colors';
+
   return (
-    <div className="min-h-screen bg-[#1a1a2e] text-[#e0e0e0] flex flex-col items-center py-8 px-4">
-      <audio
-        ref={bgAudioRef}
-        src={LOFI_BG_MP4}
-        loop
-        playsInline
-        className="hidden"
-        aria-hidden
-      />
-      <h1 className="text-3xl text-[#e94560] mb-1">Lo-fi Hip-Hop Generator</h1>
-      <p className="text-[#7a7a9e] mb-8 text-sm">LSTM · Modal · Generate on load</p>
+    <div className="page-arcade min-h-screen flex flex-col items-center py-8 px-4 pt-20">
+      <audio ref={bgAudioRef} src={LOFI_BG_MP4} loop playsInline className="hidden" aria-hidden />
+      <Link href="/" className="self-start text-sm font-medium opacity-90 hover:opacity-100 mb-6" style={{ color: 'var(--arcade-cyan)' }}>
+        ← Home
+      </Link>
+      <h1 className="text-3xl font-bold mb-1 font-[family-name:var(--font-display)]" style={{ background: 'linear-gradient(90deg, var(--arcade-cyan), var(--arcade-magenta))', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>
+        Lo-fi Hip-Hop Generator
+      </h1>
+      <p className="text-white/60 mb-8 text-sm">LSTM · Modal · Generate on load</p>
 
       <div className="w-full max-w-[520px] space-y-6">
-        <div className="bg-[#16213e] border border-[#0f3460] rounded-xl p-6">
-          <h2 className="text-lg text-[#e94560] mb-4">Generated Beat</h2>
+        <div className={cardClass}>
+          <h2 className="text-lg font-semibold mb-4" style={{ color: 'var(--arcade-cyan)' }}>Generated Beat</h2>
           <div
             className={`rounded-lg p-4 text-sm ${
-              state.status === 'info'
-                ? 'bg-[#0f3460] text-[#a0c4ff]'
-                : state.status === 'ok'
-                  ? 'bg-[#0a3d2a] text-[#90ee90]'
-                  : state.status === 'err'
-                    ? 'bg-[#3d0a0a] text-[#ff9090]'
-                    : 'bg-[#0f3460] text-[#a0c4ff]'
+              state.status === 'info' ? 'bg-black/30 text-white/90 border border-[var(--arcade-border)]'
+                : state.status === 'ok' ? 'bg-black/20 text-white/95 border border-[rgba(0,255,255,0.15)]'
+                  : state.status === 'err' ? 'bg-red-950/30 text-red-300 border border-red-500/30'
+                    : 'bg-black/30 text-white/90 border border-[var(--arcade-border)]'
             }`}
           >
             {state.message}
             {state.status === 'ok' && (
               <div className="mt-3 space-y-2">
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handlePlay()}
-                    disabled={playPending}
-                    className="px-4 py-2 bg-[#0f3460] text-[#a0c4ff] rounded-md text-sm hover:bg-[#1a4a80] disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
+                  <button type="button" onClick={() => void handlePlay()} disabled={playPending} className={btnClass}>
                     {playPending ? 'Starting…' : 'Play'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleStop()}
-                    className="px-4 py-2 bg-[#0f3460] text-[#a0c4ff] rounded-md text-sm hover:bg-[#1a4a80]"
-                  >
-                    Stop
-                  </button>
+                  <button type="button" onClick={() => void handleStop()} className={btnClass}>Stop</button>
                   {state.downloadUrl && state.fileName && (
-                    <a
-                      href={state.downloadUrl}
-                      download={state.fileName}
-                      className="px-4 py-2 bg-[#0f3460] text-[#a0c4ff] rounded-md text-sm hover:bg-[#1a4a80] inline-block"
-                    >
-                      Download MIDI
-                    </a>
+                    <a href={state.downloadUrl} download={state.fileName} className={`${btnClass} inline-block`}>Download MIDI</a>
                   )}
                 </div>
-                {playError && (
-                  <p className="text-xs text-[#ff9090]">Audio: {playError}</p>
-                )}
+                {playError && <p className="text-xs text-red-300 mt-2">Audio: {playError}</p>}
               </div>
             )}
           </div>
         </div>
 
-        <p className="text-center text-[#7a7a9e] text-xs max-w-[520px] leading-relaxed">
-          Same API as the game: <code className="bg-[#0f3460] px-1.5 py-0.5 rounded text-[0.78rem]">POST /api/generate-lofi</code> is called automatically when this page loads.
+        <p className="text-center text-white/50 text-xs max-w-[520px] leading-relaxed">
+          Same API as the game: <code className="bg-black/40 px-1.5 py-0.5 rounded text-[0.78rem]" style={{ color: 'var(--arcade-cyan)' }}>POST /api/generate-lofi</code> is called automatically when this page loads.
         </p>
 
         <div className="flex justify-center">
           <Link
             href="/game"
-            className="px-6 py-2.5 bg-[#e94560] text-white font-semibold rounded-lg hover:bg-[#c73650] transition-colors"
+            className="px-6 py-2.5 font-bold rounded-lg text-black transition-all shadow-lg active:scale-[0.98]"
+            style={{ background: 'linear-gradient(135deg, var(--arcade-cyan), #00cccc)', boxShadow: '0 0 20px rgba(0,255,255,0.35)' }}
           >
             Play game with this beat →
           </Link>

@@ -1,8 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #060510;
+  --foreground: #e0e0e0;
+  /* Arcade / neon theme */
+  --arcade-bg: #060510;
+  --arcade-bg-mid: #0d0a1a;
+  --arcade-bg-deep: #14102a;
+  --arcade-cyan: #00ffff;
+  --arcade-magenta: #ff00ff;
+  --arcade-glass: rgba(20, 16, 45, 0.85);
+  --arcade-border: rgba(255, 255, 255, 0.08);
+  --arcade-glow-cyan: 0 0 20px rgba(0, 255, 255, 0.4);
+  --arcade-glow-magenta: 0 0 20px rgba(255, 0, 255, 0.35);
+  --font-display: var(--font-orbitron), "Orbitron", sans-serif;
 }
 
 @theme inline {
@@ -12,17 +23,10 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
 @keyframes fade-in {
@@ -32,4 +36,35 @@ body {
 
 .animate-fade-in {
   animation: fade-in 0.2s ease-out;
+}
+
+/* Arcade: full-page cosmic background + dot grid */
+.page-arcade {
+  position: relative;
+  min-height: 100vh;
+  background: linear-gradient(
+    180deg,
+    var(--arcade-bg) 0%,
+    var(--arcade-bg-mid) 30%,
+    var(--arcade-bg-deep) 50%,
+    #1a1538 100%
+  );
+}
+.page-arcade::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.2;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(0, 255, 255, 0.22) 1px,
+    transparent 0
+  );
+  background-size: 28px 28px;
+}
+.page-arcade > * {
+  position: relative;
+  z-index: 1;
 }

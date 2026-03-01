@@ -1,0 +1,177 @@
+.hero {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 5rem 1.5rem 4rem;
+  overflow: hidden;
+  background: linear-gradient(
+    180deg,
+    var(--arcade-bg) 0%,
+    var(--arcade-bg-mid) 25%,
+    #14102a 50%,
+    #1a1538 100%
+  );
+}
+
+.dotGrid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.28;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(0, 255, 255, 0.3) 1px,
+    transparent 0
+  );
+  background-size: 30px 30px;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%);
+}
+
+.content {
+  position: relative;
+  z-index: 10;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 560px;
+}
+
+.impact {
+  font-family: var(--font-display);
+  font-size: clamp(0.8rem, 2vw, 0.95rem);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, var(--arcade-cyan), var(--arcade-magenta), var(--arcade-cyan));
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gradientShift 5s ease-in-out infinite;
+}
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.titleWrap {
+  display: inline-block;
+  cursor: default;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: clamp(3.25rem, 14vw, 6.5rem);
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  text-shadow: 0 0 30px rgba(0, 255, 255, 0.15);
+  transition: text-shadow 0.2s, filter 0.2s;
+}
+
+.titleWrap:hover .title {
+  animation: glitch 0.35s ease-in-out;
+  text-shadow:
+    -2px 0 var(--arcade-cyan),
+    2px 0 var(--arcade-magenta),
+    0 0 24px rgba(0, 255, 255, 0.4),
+    0 0 48px rgba(255, 0, 255, 0.3);
+}
+
+@keyframes glitch {
+  0% { transform: translate(0); filter: none; }
+  20% { transform: translate(-2px, 1px); filter: hue-rotate(-8deg); }
+  40% { transform: translate(2px, -1px); filter: hue-rotate(8deg); }
+  60% { transform: translate(-1px, 2px); filter: hue-rotate(-4deg); }
+  80% { transform: translate(1px, -2px); filter: hue-rotate(4deg); }
+  100% { transform: translate(0); filter: none; }
+}
+
+.tagline {
+  font-size: clamp(1rem, 2.5vw, 1.35rem);
+  font-weight: 600;
+  background: linear-gradient(90deg, var(--arcade-cyan), var(--arcade-magenta));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.subtitle {
+  font-size: clamp(0.95rem, 2vw, 1.15rem);
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.5;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.billboard {
+  padding: 1.25rem 2rem;
+  background: var(--arcade-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 16px;
+  border: 1px solid var(--arcade-border);
+  border-top: 2px solid var(--arcade-cyan);
+  box-shadow: 0 0 32px rgba(0, 255, 255, 0.06);
+}
+
+.playBtn {
+  display: inline-block;
+  padding: 0.875rem 1.75rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  color: #000;
+  background: linear-gradient(135deg, var(--arcade-cyan) 0%, #00cccc 100%);
+  border: none;
+  border-radius: 9999px;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+  transition: box-shadow 0.2s, filter 0.2s, transform 0.1s;
+}
+.playBtn:hover {
+  box-shadow: 0 0 28px rgba(0, 255, 255, 0.55);
+  filter: brightness(1.05);
+}
+.playBtn:active {
+  transform: scale(0.92);
+}
+
+.duelsBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.875rem 1.75rem;
+  min-width: 10rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.95);
+  background: transparent;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 9999px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+.duelsBtn:hover {
+  border-color: var(--arcade-cyan);
+  background: rgba(0, 255, 255, 0.08);
+  color: #fff;
+}
