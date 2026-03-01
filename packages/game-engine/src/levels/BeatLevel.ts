@@ -1,8 +1,7 @@
 /**
  * Beat-synced Level - Generates obstacles from audio beat timestamps.
  * Each beat time maps to an X position: x = beatTime * playerSpeed.
- * The game engine doesn't know about audio — it just gets a Level with
- * obstacles placed at the right positions to match the rhythm.
+ * Red spikes only.
  */
 import { Level, LevelSegment, GameObject, GameObjectType, Platform, Obstacle } from '../types';
 
@@ -10,20 +9,11 @@ const GROUND_Y = 500;
 const FLOOR_EXTENSION = 500000;
 
 export interface BeatLevelConfig {
-  /** Beat timestamps in seconds */
   beats: number[];
-  /** Player run speed in px/s (must match GameEngineConfig.playerSpeed) */
   playerSpeed: number;
-  /** Optional: per-beat intensity values (0-1). Higher = block, lower = spike */
   intensities?: number[];
-  /** Probability that a given beat actually gets an obstacle (default 0.4).
-   *  Lower = more empty space / breathing room. */
   placementChance?: number;
-  /** Fraction of placed obstacles that are blocks vs spikes (default 0.35) */
-  blockChance?: number;
-  /** Minimum gap in seconds between obstacles to avoid impossible clusters (default 0.3) */
   minGapSeconds?: number;
-  /** Seed for deterministic randomness so the same song always produces the same level */
   seed?: number;
 }
 

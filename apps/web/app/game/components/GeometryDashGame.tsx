@@ -535,7 +535,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         }
         const getEmbeddedSolanaWallet = (): ConnectedSolanaWallet | undefined =>
           solanaWalletsRef.current.find(
-            (w) => w.walletClientType === 'privy' || w.walletClientType === 'privy-v2',
+            (w: ConnectedSolanaWallet) => w.walletClientType === 'privy' || w.walletClientType === 'privy-v2',
           );
         if (!isPrivyAuthenticated) {
           setStatusMessage('Open Privy and sign in with your email code...');
@@ -864,6 +864,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         canvasHeight: height,
         playerSpeed: PLAYER_SPEED,
         initialChunkSeed: seed,
+        initialPlayerSpeed: Math.round(PLAYER_SPEED * 0.55),
+        speedRampDurationSeconds: 75,
       });
 
       engine.onRender((state) => renderer.render(state));
@@ -1240,10 +1242,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       )
     : null;
 
-  const ratePerSec = poolConfig?.payoutRateBaseUnitsPerSecond
-    ?? BigInt(process.env.NEXT_PUBLIC_PAYOUT_RATE_BASE_UNITS_PER_SECOND ?? '100000');
   const embeddedPrivyWallet = solanaWallets.find(
-    (w) => w.walletClientType === 'privy' || w.walletClientType === 'privy-v2',
+    (w: ConnectedSolanaWallet) => w.walletClientType === 'privy' || w.walletClientType === 'privy-v2',
   );
 
   // ------------------------------------------------------------------
@@ -1286,20 +1286,21 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           height={height}
           className="border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
         />
-        {gameState && liveEarned !== null && !isDuelMode && (
+        {gameState && extractHoldProgress > 0 && !hasExtracted && !isGameOver && (
           <div
-            className="absolute pointer-events-none font-mono text-sm font-bold text-emerald-400 drop-shadow-lg"
+            className="absolute pointer-events-none font-mono w-48"
             style={{
               left: gameState.player.position.x - gameState.cameraOffset + gameState.player.size.x / 2,
-              top: gameState.player.position.y - 40,
+              top: gameState.player.position.y - 72,
               transform: 'translate(-50%, 0)',
             }}
           >
-            <div className="bg-black/60 backdrop-blur-sm px-2 py-1 rounded border border-emerald-400/40 whitespace-nowrap">
-              +{formatSol(ratePerSec)} SOL/s
-            </div>
-            <div className="text-emerald-300/90 text-xs mt-0.5 bg-black/50 px-2 py-0.5 rounded">
-              Earned: {formatSol(liveEarned)} SOL
+            <div className="text-xs text-emerald-300 mb-1 text-center">Hold E to extract</div>
+            <div className="w-full h-2 bg-black/70 rounded overflow-hidden border border-emerald-400/30">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-[width] duration-75"
+                style={{ width: `${Math.round(extractHoldProgress * 100)}%` }}
+              />
             </div>
           </div>
         )}
@@ -1492,31 +1493,38 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             </div>
           )}
 
-          <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-4 py-3 rounded-lg border border-purple-500/30 max-w-[30rem]">
-            <div className="text-xs text-purple-200 font-mono space-y-1">
-              <div>Wallet: {walletAddress ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}` : 'Not connected'}</div>
-              {walletProviderName && <div>Provider: {walletProviderName === 'privy' ? 'Privy (Embedded)' : 'Phantom'}</div>}
-              {walletBalanceLamports !== null && (
-                <div className="text-emerald-400 font-semibold">Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
-              )}
-              {terrainSeed !== null && (
-                <div className="text-cyan-300/90">
-                  Terrain seed: 0x{terrainSeed.toString(16).toUpperCase().padStart(8, '0')}
-                </div>
-              )}
-              {vrfRequestTx && (
-                <a
-                  href={`https://solscan.io/tx/${vrfRequestTx}${RPC_URL.includes('devnet') ? '?cluster=devnet' : ''}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-cyan-400 hover:text-cyan-300 underline block pointer-events-auto"
-                >
-                  Verified by ORAO VRF
-                </a>
-              )}
-              {statusMessage && <div className="text-cyan-300">{statusMessage}</div>}
-              {errorMessage && <div className="text-red-300">{errorMessage}</div>}
-            </div>
+          <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-5 py-4 rounded-lg border border-purple-500/30">
+            {hasStarted && !isGameOver && !hasExtracted && liveEarned !== null && !isDuelMode ? (
+              <div className="font-mono text-emerald-400">
+                <div className="text-sm text-purple-200/90 uppercase tracking-wider mb-1">SOL earned</div>
+                <div className="text-2xl font-bold tabular-nums">{formatSol(liveEarned)} SOL</div>
+              </div>
+            ) : (
+              <div className="text-xs text-purple-200 font-mono space-y-1">
+                <div>Wallet: {walletAddress ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}` : 'Not connected'}</div>
+                {walletProviderName && <div>Provider: {walletProviderName === 'privy' ? 'Privy (Embedded)' : 'Phantom'}</div>}
+                {walletBalanceLamports !== null && (
+                  <div className="text-emerald-400 font-semibold">Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
+                )}
+                {terrainSeed !== null && (
+                  <div className="text-cyan-300/90">
+                    Terrain seed: 0x{terrainSeed.toString(16).toUpperCase().padStart(8, '0')}
+                  </div>
+                )}
+                {vrfRequestTx && (
+                  <a
+                    href={`https://solscan.io/tx/${vrfRequestTx}${RPC_URL.includes('devnet') ? '?cluster=devnet' : ''}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-cyan-400 hover:text-cyan-300 underline block pointer-events-auto"
+                  >
+                    Verified by ORAO VRF
+                  </a>
+                )}
+                {statusMessage && <div className="text-cyan-300">{statusMessage}</div>}
+                {errorMessage && <div className="text-red-300">{errorMessage}</div>}
+              </div>
+            )}
           </div>
 
           <div className="absolute bottom-8 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-purple-500/30">
@@ -1527,17 +1535,6 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             </div>
           </div>
 
-          {extractHoldProgress > 0 && !hasExtracted && !isGameOver && (
-            <div className="absolute bottom-8 right-8 bg-black/60 backdrop-blur-sm px-4 py-3 rounded-lg border border-emerald-400/40 w-72">
-              <div className="text-xs text-emerald-300 font-mono mb-2">Hold E to extract</div>
-              <div className="w-full h-2 bg-black/70 rounded overflow-hidden border border-emerald-400/30">
-                <div
-                  className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-[width] duration-75"
-                  style={{ width: `${Math.round(extractHoldProgress * 100)}%` }}
-                />
-              </div>
-            </div>
-          )}
 
           {hasExtracted && frozenEarned !== null && !isDuelMode && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">

@@ -102,8 +102,6 @@ export class Renderer {
     this.drawParallaxStars(gameState.cameraOffset);
     this.drawParallaxClouds(gameState.cameraOffset);
     this.drawGround(gameState.cameraOffset);
-
-    // Draw game objects relative to camera
     this.drawGameObjects(gameState);
     this.drawPlayer(gameState.player, gameState.cameraOffset);
   }
@@ -172,34 +170,25 @@ export class Renderer {
     const groundHeight = 100;
     const groundY = this.height - groundHeight;
 
-    // Draw ground with pattern
     this.ctx.fillStyle = this.colors.ground;
     this.ctx.fillRect(0, groundY, this.width, groundHeight);
 
-    // Add grid pattern to ground
     this.ctx.strokeStyle = this.colors.groundDark;
     this.ctx.lineWidth = 2;
-
     const gridSize = 50;
     const offset = cameraOffset % gridSize;
-
-    // Vertical lines
     for (let x = -offset; x < this.width; x += gridSize) {
       this.ctx.beginPath();
       this.ctx.moveTo(x, groundY);
       this.ctx.lineTo(x, this.height);
       this.ctx.stroke();
     }
-
-    // Horizontal lines
     for (let y = groundY; y < this.height; y += gridSize) {
       this.ctx.beginPath();
       this.ctx.moveTo(0, y);
       this.ctx.lineTo(this.width, y);
       this.ctx.stroke();
     }
-
-    // Top border glow
     this.ctx.strokeStyle = this.colors.platformGlow;
     this.ctx.lineWidth = 3;
     this.ctx.shadowBlur = 15;
@@ -216,12 +205,8 @@ export class Renderer {
 
     gameObjects.forEach(obj => {
       if (!obj.active) return;
-
-      // Only draw objects that are visible on screen
       const screenX = obj.position.x - cameraOffset;
-      if (screenX < -obj.size.x - 100 || screenX > this.width + 100) {
-        return;
-      }
+      if (screenX < -obj.size.x - 100 || screenX > this.width + 100) return;
 
       switch (obj.type) {
         case GameObjectType.OBSTACLE_SPIKE:
@@ -244,10 +229,7 @@ export class Renderer {
   private drawPlayer(player: Player, cameraOffset: number): void {
     const screenX = player.position.x - cameraOffset;
     const screenY = player.position.y;
-
     this.ctx.save();
-
-    // Translate to player position
     this.ctx.translate(screenX + player.size.x / 2, screenY + player.size.y / 2);
 
     // Rotate based on velocity (adds dynamic feel)
@@ -288,7 +270,6 @@ export class Renderer {
 
     this.ctx.restore();
 
-    // Draw trail effect when moving fast
     if (Math.abs(player.velocity.x) > 3) {
       this.drawPlayerTrail(screenX, screenY, player.size);
     }
@@ -314,15 +295,12 @@ export class Renderer {
   private drawObstacle(obstacle: Obstacle, cameraOffset: number): void {
     const screenX = obstacle.position.x - cameraOffset;
     const screenY = obstacle.position.y;
-
     this.ctx.save();
-
     if (obstacle.type === GameObjectType.OBSTACLE_SPIKE) {
       this.drawSpike(screenX, screenY, obstacle.size);
     } else {
       this.drawBlock(screenX, screenY, obstacle.size);
     }
-
     this.ctx.restore();
   }
 

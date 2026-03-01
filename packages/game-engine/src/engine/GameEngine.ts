@@ -8,10 +8,14 @@ import { generateInfiniteChunk } from '../levels/InfiniteLevel';
 export interface GameEngineConfig {
   canvasWidth: number;
   canvasHeight: number;
-  playerSpeed: number; // Auto-run speed
+  playerSpeed: number; // Max/target run speed (px/s)
   physicsConfig?: Partial<PhysicsConfig>;
   /** Initial seed for procedural chunk generation (VRF-verified terrain) */
   initialChunkSeed?: number;
+  /** Starting run speed; if set, speed ramps from this to playerSpeed over speedRampDurationSeconds (default: no ramp) */
+  initialPlayerSpeed?: number;
+  /** Seconds over which run speed ramps from initialPlayerSpeed to playerSpeed (default 75) */
+  speedRampDurationSeconds?: number;
 }
 
 export class GameEngine {
@@ -41,8 +45,9 @@ export class GameEngine {
     this.inputHandler = new InputHandler();
     this.chunkSeed = config.initialChunkSeed ?? 1;
 
-    // Initialize game state
-    this.gameState = this.createInitialState(initialLevel);
+    // Initialize game state (use initial speed if ramping)
+    const startSpeed = this.config.initialPlayerSpeed ?? this.config.playerSpeed;
+    this.gameState = this.createInitialState(initialLevel, startSpeed);
 
     // Track how far hand-placed content extends so procedural gen starts after it
     const maxObjX = initialLevel.segments.reduce((max, seg) => {
@@ -55,11 +60,12 @@ export class GameEngine {
   /**
    * Create initial game state
    */
-  private createInitialState(level: Level): GameState {
+  private createInitialState(level: Level, initialSpeed?: number): GameState {
+    const runSpeed = initialSpeed ?? this.config.playerSpeed;
     const player: Player = {
       id: 'player',
       position: { x: 100, y: this.config.canvasHeight - 150 },
-      velocity: { x: this.config.playerSpeed, y: 0 },
+      velocity: { x: runSpeed, y: 0 },
       size: { x: 30, y: 30 },
       type: GameObjectType.PLAYER,
       active: true,
@@ -197,8 +203,9 @@ export class GameEngine {
       GameEngine.GROUND_Y
     );
 
-    // Maintain player's forward speed
-    this.physicsEngine.setPlayerRunSpeed(this.gameState.player, this.config.playerSpeed);
+    // Maintain player's forward speed (ramp from initial to max over time if configured)
+    const effectiveSpeed = this.getEffectiveRunSpeed();
+    this.physicsEngine.setPlayerRunSpeed(this.gameState.player, effectiveSpeed);
 
     // Update camera to follow player
     this.updateCamera();
@@ -254,6 +261,19 @@ export class GameEngine {
     if (this.inputHandler.consumeAction('pause')) {
       this.togglePause();
     }
+  }
+
+  /**
+   * Get current run speed (ramps from initial to max over time when configured)
+   */
+  private getEffectiveRunSpeed(): number {
+    const max = this.config.playerSpeed;
+    const initial = this.config.initialPlayerSpeed;
+    if (initial == null || initial >= max) return max;
+    const duration = this.config.speedRampDurationSeconds ?? 75;
+    const t = this.gameState.elapsedTime;
+    const blend = duration <= 0 ? 1 : Math.min(1, t / duration);
+    return initial + (max - initial) * blend;
   }
 
   /**
@@ -339,7 +359,8 @@ export class GameEngine {
    * Restart the game
    */
   restart(): void {
-    this.gameState = this.createInitialState(this.gameState.currentLevel);
+    const startSpeed = this.config.initialPlayerSpeed ?? this.config.playerSpeed;
+    this.gameState = this.createInitialState(this.gameState.currentLevel, startSpeed);
     this.inputHandler.reset();
 
     // Reset infinite generation so procedural content starts fresh
@@ -406,7 +427,8 @@ export class GameEngine {
    */
   loadLevel(level: Level): void {
     this.stop();
-    this.gameState = this.createInitialState(level);
+    const startSpeed = this.config.initialPlayerSpeed ?? this.config.playerSpeed;
+    this.gameState = this.createInitialState(level, startSpeed);
     this.start();
   }
 

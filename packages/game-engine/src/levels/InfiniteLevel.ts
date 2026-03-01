@@ -1,12 +1,11 @@
 /**
  * Infinite Level - Procedurally generates content as the player progresses
- * Solid continuous floor, obstacles (spikes, blocks) generated on demand
+ * Solid continuous floor, red spikes only.
  */
 import { Level, LevelSegment, GameObject, GameObjectType, Platform, Obstacle } from '../types';
 
 const GROUND_Y = 500;
 const CHUNK_SIZE = 800;
-const INITIAL_LENGTH = 6000;
 const FLOOR_EXTENSION = 500000;
 
 function seededRandom(seed: number) {
@@ -16,17 +15,16 @@ function seededRandom(seed: number) {
   };
 }
 
-// 11 seconds at 300px/s = 3300 - significantly more spread out after this
-const EASIER_AFTER_X = 3300;
-const BLOCK_WIDTH = 50;
-const BLOCK_HEIGHT = 50;
+/** Distance over which difficulty ramps from easy to hard (world X) */
+const RAMP_DISTANCE = 8000;
 
 function generateChunkObstacles(startX: number, length: number, seed: number): Obstacle[] {
   const obstacles: Obstacle[] = [];
   const rng = seededRandom(seed);
-  const isPast11Sec = startX >= EASIER_AFTER_X;
-  const minSpacing = isPast11Sec ? 400 : 200;
-  const maxSpacing = isPast11Sec ? 600 : 320;
+  // Start easy (generous spacing), ramp to hard (tighter spacing) as distance increases
+  const progress = Math.min(1, startX / RAMP_DISTANCE);
+  const minSpacing = Math.max(120, 320 - progress * 170);  // 320 -> 150
+  const maxSpacing = Math.max(200, 520 - progress * 220);  // 520 -> 300
 
   let x = startX + 80;
   while (x < startX + length - 100) {
