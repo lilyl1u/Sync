@@ -47,21 +47,28 @@ export default function DuelsPage() {
 
   const subscribeTo = useCallback((code: string, role: 'host' | 'joiner') => {
     unsubRef.current?.();
-    const unsub = onSnapshot(doc(db, 'lobbies', code), (snap) => {
-      if (!snap.exists()) {
+    const unsub = onSnapshot(
+      doc(db, 'lobbies', code),
+      (snap) => {
+        if (!snap.exists()) {
+          setLobbyState({ type: 'idle' });
+          return;
+        }
+        const data = snap.data();
+        const playerCount = data.joinerWallet ? 2 : 1;
+        setLobbyState({
+          type: 'in_lobby',
+          code,
+          bet: data.bet,
+          role,
+          playerCount,
+        });
+      },
+      (err) => {
+        console.error('Lobby listener error:', err);
         setLobbyState({ type: 'idle' });
-        return;
       }
-      const data = snap.data();
-      const playerCount = data.joinerWallet ? 2 : 1;
-      setLobbyState({
-        type: 'in_lobby',
-        code,
-        bet: data.bet,
-        role,
-        playerCount,
-      });
-    });
+    );
     unsubRef.current = unsub;
   }, []);
 
@@ -81,6 +88,14 @@ export default function DuelsPage() {
         joinerWallet: null,
         status: 'waiting',
         createdAt: serverTimestamp(),
+      });
+      // Optimistically show lobby — don't wait for onSnapshot
+      setLobbyState({
+        type: 'in_lobby',
+        code,
+        bet,
+        role: 'host',
+        playerCount: 1,
       });
       subscribeTo(code, 'host');
     } catch (err) {
@@ -114,6 +129,14 @@ export default function DuelsPage() {
       await updateDoc(lobbyRef, {
         joinerWallet: 'joined',
         status: 'ready',
+      });
+      // Optimistically show lobby — don't wait for onSnapshot
+      setLobbyState({
+        type: 'in_lobby',
+        code,
+        bet: data.bet,
+        role: 'joiner',
+        playerCount: 2,
       });
       subscribeTo(code, 'joiner');
     } catch (err) {
