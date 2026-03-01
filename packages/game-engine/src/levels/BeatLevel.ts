@@ -40,7 +40,6 @@ function generateObstaclesFromBeats(config: BeatLevelConfig): Obstacle[] {
     playerSpeed,
     intensities,
     placementChance = 0.4,
-    blockChance = 0.35,
     minGapSeconds = 0.3,
     seed = 42,
   } = config;
@@ -51,43 +50,23 @@ function generateObstaclesFromBeats(config: BeatLevelConfig): Obstacle[] {
 
   for (let i = 0; i < beats.length; i++) {
     const beatTime = beats[i];
-
-    // Skip the first ~1.5 seconds so the player has a runway
     if (beatTime < 1.5) continue;
-    // Skip beats that are too close together
     if (beatTime - lastPlacedTime < minGapSeconds) continue;
 
-    // Only place an obstacle on a fraction of beats — more breathing room
-    // Use intensity to bias: louder beats are more likely to get an obstacle
     const intensity = intensities ? intensities[i] ?? 0.5 : 0.5;
     const adjustedChance = placementChance + intensity * 0.2;
     if (rng() > adjustedChance) continue;
 
     const x = beatTime * playerSpeed;
-    const isBlock = rng() < blockChance;
-
-    if (isBlock) {
-      obstacles.push({
-        id: `beat-block-${i}`,
-        position: { x, y: GROUND_Y - 50 },
-        velocity: { x: 0, y: 0 },
-        size: { x: 50, y: 50 },
-        type: GameObjectType.OBSTACLE_BLOCK,
-        active: true,
-        damage: 1,
-      });
-    } else {
-      obstacles.push({
-        id: `beat-spike-${i}`,
-        position: { x, y: GROUND_Y - 30 },
-        velocity: { x: 0, y: 0 },
-        size: { x: 30, y: 30 },
-        type: GameObjectType.OBSTACLE_SPIKE,
-        active: true,
-        damage: 1,
-      });
-    }
-
+    obstacles.push({
+      id: `beat-spike-${i}`,
+      position: { x, y: GROUND_Y - 30 },
+      velocity: { x: 0, y: 0 },
+      size: { x: 30, y: 30 },
+      type: GameObjectType.OBSTACLE_SPIKE,
+      active: true,
+      damage: 1,
+    });
     lastPlacedTime = beatTime;
   }
 

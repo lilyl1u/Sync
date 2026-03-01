@@ -176,35 +176,20 @@ export function createInfiniteLevel(): Level {
     });
   };
 
-  const addBlock = (x: number, width = 42, height = 42) => {
-    obstacles.push({
-      id: `block-${obstacleId++}`,
-      position: { x, y: groundY - height },
-      velocity: { x: 0, y: 0 },
-      size: { x: width, y: height },
-      type: GameObjectType.OBSTACLE_BLOCK,
-      active: true,
-      damage: 1,
-    });
-  };
-
   // Continuous base terrain across the full run.
   for (let x = 0; x < levelLength; x += groundChunk) {
     addGround(x, Math.min(groundChunk, levelLength - x));
   }
 
-  // Section A (intro): sparse single spikes, generous spacing.
+  // Section A (intro): sparse single spikes only.
   for (let x = 900; x < 5000; x += 540) {
     addSpike(x);
   }
 
-  // Section B (rhythm): singles + doubles + low hops.
+  // Section B (rhythm): spikes only (no blocks).
   for (let x = 5200; x < 15000; x += 900) {
     addSpike(x + 50);
     addSpike(x + 220);
-    addBlock(x + 420, 40, 40);
-
-    // Every other pattern adds a double for timing variety.
     if (((x / 900) & 1) === 0) {
       addSpike(x + 620);
       addSpike(x + 648);
@@ -213,20 +198,18 @@ export function createInfiniteLevel(): Level {
     }
   }
 
-  // Section C (platform interplay): reachable elevated lanes and returns.
+  // Section C: spikes + elevated platforms (no blocks).
   for (let x = 15400; x < 28000; x += 1000) {
     addSpike(x + 60);
-    addBlock(x + 220, 44, 44);
     addPlatform(x + 380, 430, 150, 20);
-    addSpike(x + 420, 430 - 24, 24); // spike on elevated platform
+    addSpike(x + 420, 430 - 24, 24);
     addSpike(x + 700);
   }
 
-  // Section D (late game): denser but still fair spacing.
+  // Section D (late game): spikes only.
   for (let x = 28400; x < 39200; x += 780) {
     addSpike(x + 40);
     addSpike(x + 170);
-    addBlock(x + 300, 46, 46);
     addSpike(x + 430);
     if (((x / 780) % 3) === 0) {
       addSpike(x + 458);

@@ -26,7 +26,8 @@ import { RPC_URL } from '@/lib/solana';
 import { requestAndWaitFulfilled } from '@/lib/oraoVrf';
 import { db } from '@/lib/firebase';
 
-import { detectBeats, DetectedBeat } from '../utils/beatDetector';
+import type { DetectedBeat } from '../utils/beatDetector';
+import * as Tone from 'tone';
 import { playMidi, stopMidi, pauseMidi as pauseMidiPlayback, resumeMidi as resumeMidiPlayback } from '../utils/midiPlayer';
 
 type DuelLobbyData = {
@@ -46,12 +47,21 @@ type DuelLobbyData = {
 };
 
 const PLAYER_SPEED = 300;
-const AUDIO_URL = '/song/song.mp3';
 const LOFI_API = '/api/generate-lofi';
-/** Background track layered 50% with generated MIDI (same as lofi page). */
+const LOFI_TIMEOUT_MS = 55000;
+/** Background track; always used for playback so game starts fast. */
 const BG_MP4_URL = '/audio.mp4';
 const BG_VOLUME = 0.5;
 const MIDI_VOLUME = 0.5;
+
+/** Synthetic beats when LOFI/song unavailable: one beat every 0.5s for 2 min. */
+function syntheticBeats(): DetectedBeat[] {
+  const beats: DetectedBeat[] = [];
+  for (let t = 0; t < 120; t += 0.5) {
+    beats.push({ time: t, intensity: 0.7 });
+  }
+  return beats;
+}
 
 interface GeometryDashGameProps {
   width?: number;
@@ -276,7 +286,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   }, [duelCode, role]);
 
   // ------------------------------------------------------------------
-  // Load & analyse audio on mount (level/engine created on Pay & Start after VRF)
+  // Load audio/beats quickly: try LOFI API with short timeout, else synthetic beats.
+  // No heavy decode so "Ready to play" appears in ~1–2s.
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -285,48 +296,59 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     if (!ctx) return;
 
     let cancelled = false;
-
     const renderer = new Renderer({ canvas, width, height });
     rendererRef.current = renderer;
 
     (async () => {
+      console.log('[LOFI] Load started, timeout ms:', LOFI_TIMEOUT_MS);
       try {
-        // Try Lofi API first (AI-generated beat track)
-        const lofiRes = await fetch(LOFI_API, { method: 'POST' });
-        if (cancelled) return;
-        if (lofiRes.ok) {
-          const data = await lofiRes.json();
-          const beats: DetectedBeat[] = (data.beats as number[]).map((time: number, i: number) => ({
-            time,
-            intensity: (data.intensities as number[])?.[i] ?? 0.5,
-          }));
-          if (beats.length > 0) {
-            beatsRef.current = beats;
-            midiBase64Ref.current = data.midiBase64 ?? null;
-            setAudioLoaded(true);
-            return;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), LOFI_TIMEOUT_MS);
+        let lofiOk = false;
+        try {
+          console.log('[LOFI] Fetching', LOFI_API);
+          const lofiRes = await fetch(LOFI_API, { method: 'POST', signal: controller.signal });
+          clearTimeout(timeoutId);
+          console.log('[LOFI] Response ok:', lofiRes.ok, 'status:', lofiRes.status);
+          if (cancelled) return;
+          if (lofiRes.ok) {
+            const data = await lofiRes.json();
+            console.log('[LOFI] Data keys:', Object.keys(data), 'beats count:', (data.beats as number[])?.length, 'has midiBase64:', !!data.midiBase64, 'midiBase64 length:', typeof data.midiBase64 === 'string' ? data.midiBase64.length : 0);
+            const beats: DetectedBeat[] = (data.beats as number[]).map((time: number, i: number) => ({
+              time,
+              intensity: (data.intensities as number[])?.[i] ?? 0.5,
+            }));
+            if (beats.length > 0) {
+              beatsRef.current = beats;
+              midiBase64Ref.current = data.midiBase64 ?? null;
+              console.log('[LOFI] Success: beats=', beats.length, 'midiBase64Ref set:', !!midiBase64Ref.current);
+              setAudioLoaded(true);
+              lofiOk = true;
+            } else {
+              console.log('[LOFI] Beats empty, skipping');
+            }
+          } else {
+            const text = await lofiRes.text();
+            console.log('[LOFI] Response not ok body:', text.slice(0, 200));
           }
+        } catch (e) {
+          clearTimeout(timeoutId);
+          console.log('[LOFI] Fetch error:', e);
+        }
+        if (cancelled) return;
+        if (lofiOk) {
+          setLoadingAudio(false);
+          return;
         }
 
-        // Fallback: static audio + beat detection
+        console.log('[LOFI] Fallback: synthetic beats');
         midiBase64Ref.current = null;
-        const response = await fetch(AUDIO_URL);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const arrayBuffer = await response.arrayBuffer();
-
-        const audioCtx = new AudioContext();
-        audioCtxRef.current = audioCtx;
-
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        audioBufferRef.current = audioBuffer;
-
-        if (cancelled) return;
-
-        const beats = await detectBeats(audioBuffer);
-        beatsRef.current = beats;
-
+        beatsRef.current = syntheticBeats();
         setAudioLoaded(true);
-      } catch {
+      } catch (e) {
+        console.log('[LOFI] Outer catch:', e);
+        beatsRef.current = syntheticBeats();
+        setAudioLoaded(true);
         setAudioError(true);
       } finally {
         setLoadingAudio(false);
@@ -353,7 +375,9 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     const el = bgAudioRef.current;
     if (!el) return;
     el.volume = BG_VOLUME;
-    el.play().catch(() => {});
+    el.play().catch(() => {
+      setTimeout(() => el.play().catch(() => {}), 150);
+    });
   }, []);
 
   const stopBgMp4 = useCallback(() => {
@@ -364,14 +388,23 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   }, []);
 
   const playAudio = useCallback(() => {
+    console.log('[playAudio] called, midiBase64Ref.current:', !!midiBase64Ref.current, 'length:', midiBase64Ref.current?.length ?? 0);
     startBgMp4();
 
     const midiB64 = midiBase64Ref.current;
     if (midiB64) {
-      void playMidi(midiB64, MIDI_VOLUME);
+      console.log('[playAudio] Has MIDI, calling Tone.start() then playMidi');
+      Tone.start()
+        .then(() => {
+          console.log('[playAudio] Tone.start() resolved, calling playMidi');
+          return playMidi(midiB64, MIDI_VOLUME);
+        })
+        .then(() => console.log('[playAudio] playMidi() completed'))
+        .catch((e) => console.log('[playAudio] Tone/playMidi error:', e));
       audioStartedRef.current = true;
       return;
     }
+    console.log('[playAudio] No MIDI, buffer path not used (synthetic beats)');
 
     const audioCtx = audioCtxRef.current;
     const buffer = audioBufferRef.current;
@@ -1214,6 +1247,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       <audio
         ref={bgAudioRef}
         src={BG_MP4_URL}
+        preload="auto"
         loop
         playsInline
         className="hidden"

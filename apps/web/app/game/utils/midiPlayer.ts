@@ -31,27 +31,40 @@ function midiToNoteName(midi: number): string {
 
 /** volume 0–1 (e.g. 0.5 for 50% when layering with audio.mp4) */
 export async function playMidi(midiBase64: string, volume = 1): Promise<void> {
-  const { synth } = getMidiPlayer();
-  synth.sync().releaseAll();
-  synth.toDestination();
-  synth.volume.value = volume <= 0 ? -Infinity : 20 * Math.log10(volume);
+  console.log('[playMidi] called, midiBase64 length:', midiBase64?.length, 'volume:', volume);
+  try {
+    console.log('[playMidi] Tone.start()...');
+    await Tone.start();
+    console.log('[playMidi] Tone.start() done, context state:', (Tone.getContext() as { rawContext?: AudioContext })?.rawContext?.state);
 
-  const bytes = Uint8Array.from(atob(midiBase64), (c) => c.charCodeAt(0));
-  const midi = new Midi(bytes.buffer);
+    const { synth } = getMidiPlayer();
+    synth.releaseAll();
+    synth.toDestination();
+    synth.volume.value = volume <= 0 ? -Infinity : 20 * Math.log10(volume);
 
-  await Tone.start();
+    const bytes = Uint8Array.from(atob(midiBase64), (c) => c.charCodeAt(0));
+    console.log('[playMidi] Decoded MIDI bytes:', bytes.length);
+    const midi = new Midi(bytes.buffer);
+    console.log('[playMidi] Midi tracks:', midi.tracks.length);
 
-  const now = Tone.now();
-  for (const track of midi.tracks) {
-    for (const note of track.notes) {
-      const noteName = midiToNoteName(note.midi);
-      synth.triggerAttackRelease(
-        noteName,
-        note.duration,
-        now + note.time,
-        note.velocity
-      );
+    const now = Tone.now();
+    let noteCount = 0;
+    for (const track of midi.tracks) {
+      for (const note of track.notes) {
+        const noteName = midiToNoteName(note.midi);
+        synth.triggerAttackRelease(
+          noteName,
+          note.duration,
+          now + note.time,
+          note.velocity
+        );
+        noteCount++;
+      }
     }
+    console.log('[playMidi] Scheduled notes:', noteCount, 'Tone.now():', now);
+  } catch (e) {
+    console.log('[playMidi] Error:', e);
+    throw e;
   }
 }
 
