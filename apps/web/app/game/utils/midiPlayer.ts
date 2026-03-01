@@ -29,11 +29,12 @@ function midiToNoteName(midi: number): string {
   return `${name}${octave}`;
 }
 
-export async function playMidi(midiBase64: string): Promise<void> {
+/** volume 0–1 (e.g. 0.5 for 50% when layering with audio.mp4) */
+export async function playMidi(midiBase64: string, volume = 1): Promise<void> {
   const { synth } = getMidiPlayer();
   synth.sync().releaseAll();
-  // Ensure output is connected (in case we were disconnected by stopMidi)
   synth.toDestination();
+  synth.volume.value = volume <= 0 ? -Infinity : 20 * Math.log10(volume);
 
   const bytes = Uint8Array.from(atob(midiBase64), (c) => c.charCodeAt(0));
   const midi = new Midi(bytes.buffer);

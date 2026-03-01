@@ -48,6 +48,10 @@ type DuelLobbyData = {
 const PLAYER_SPEED = 300;
 const AUDIO_URL = '/song/song.mp3';
 const LOFI_API = '/api/generate-lofi';
+/** Background track layered 50% with generated MIDI (same as lofi page). */
+const BG_MP4_URL = '/audio.mp4';
+const BG_VOLUME = 0.5;
+const MIDI_VOLUME = 0.5;
 
 interface GeometryDashGameProps {
   width?: number;
@@ -196,6 +200,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const audioStartedRef = useRef(false);
   const beatsRef = useRef<DetectedBeat[]>([]);
   const midiBase64Ref = useRef<string | null>(null);
+  const bgAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isGameOver, setIsGameOver] = useState(false);
@@ -342,12 +347,28 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   }, [width, height]);
 
   // ------------------------------------------------------------------
-  // Audio playback helpers
+  // Audio playback helpers: generated MIDI (or fallback song) at 50% + audio.mp4 at 50%
   // ------------------------------------------------------------------
+  const startBgMp4 = useCallback(() => {
+    const el = bgAudioRef.current;
+    if (!el) return;
+    el.volume = BG_VOLUME;
+    el.play().catch(() => {});
+  }, []);
+
+  const stopBgMp4 = useCallback(() => {
+    const el = bgAudioRef.current;
+    if (!el) return;
+    el.pause();
+    el.currentTime = 0;
+  }, []);
+
   const playAudio = useCallback(() => {
+    startBgMp4();
+
     const midiB64 = midiBase64Ref.current;
     if (midiB64) {
-      void playMidi(midiB64);
+      void playMidi(midiB64, MIDI_VOLUME);
       audioStartedRef.current = true;
       return;
     }
@@ -360,15 +381,19 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
 
     const source = audioCtx.createBufferSource();
     source.buffer = buffer;
-    source.connect(audioCtx.destination);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = BG_VOLUME;
+    source.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
     source.start(0);
     sourceNodeRef.current = source;
     audioStartedRef.current = true;
 
     if (audioCtx.state === 'suspended') audioCtx.resume();
-  }, []);
+  }, [startBgMp4]);
 
   const stopAudio = useCallback(() => {
+    stopBgMp4();
     if (midiBase64Ref.current) {
       stopMidi();
       audioStartedRef.current = false;
@@ -377,9 +402,11 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
     sourceNodeRef.current = null;
     audioStartedRef.current = false;
-  }, []);
+  }, [stopBgMp4]);
 
   const pauseAudio = useCallback(() => {
+    const el = bgAudioRef.current;
+    if (el) el.pause();
     if (midiBase64Ref.current) {
       pauseMidiPlayback();
       return;
@@ -388,6 +415,11 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   }, []);
 
   const resumeAudio = useCallback(() => {
+    const el = bgAudioRef.current;
+    if (el) {
+      el.volume = BG_VOLUME;
+      el.play().catch(() => {});
+    }
     if (midiBase64Ref.current) {
       resumeMidiPlayback();
       return;
@@ -1179,6 +1211,14 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       className="relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none"
       aria-label="Game"
     >
+      <audio
+        ref={bgAudioRef}
+        src={BG_MP4_URL}
+        loop
+        playsInline
+        className="hidden"
+        aria-hidden
+      />
       {/* Duel countdown overlay */}
       {duelCountdown !== null && duelCountdown > 0 && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
