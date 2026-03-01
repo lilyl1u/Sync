@@ -79,6 +79,11 @@ async function playMidiInPage(midiBase64: string, volume = 1): Promise<() => voi
   };
 }
 
+/** Preload Tone + Midi so first Play is fast (they're large chunks). */
+function preloadAudioLibraries(): void {
+  void Promise.all([import('tone'), import('@tonejs/midi')]);
+}
+
 export default function LofiPage() {
   const [state, setState] = useState<GenState>({
     status: 'info',
@@ -86,6 +91,12 @@ export default function LofiPage() {
   });
   const stopMidiRef = useRef<(() => void) | null>(null);
   const bgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [playPending, setPlayPending] = useState(false);
+
+  // Preload tone + @tonejs/midi on mount so first Play / auto-play is much faster
+  useEffect(() => {
+    preloadAudioLibraries();
+  }, []);
 
   const startBgMp4 = useCallback(() => {
     const el = bgAudioRef.current;
@@ -153,11 +164,14 @@ export default function LofiPage() {
 
         // Auto-play when ready: hardcoded MP4 at 50% + generated MIDI at 50%
         try {
+          setPlayPending(true);
           startBgMp4();
           const stop = await playMidiInPage(midiBase64, MIDI_VOLUME);
           stopMidiRef.current = stop;
         } catch (playErr) {
           console.warn('Auto-play failed (click Play to start):', playErr);
+        } finally {
+          setPlayPending(false);
         }
       } catch (e) {
         if (cancelled) return;
@@ -200,6 +214,7 @@ export default function LofiPage() {
   const handlePlay = useCallback(async () => {
     if (!state.midiBase64) return;
     setPlayError(null);
+    setPlayPending(true);
     handleStop(); // stop any current playback first
     try {
       startBgMp4();
@@ -209,6 +224,8 @@ export default function LofiPage() {
       console.error('Play failed:', e);
       const msg = e instanceof Error ? e.message : String(e);
       setPlayError(msg);
+    } finally {
+      setPlayPending(false);
     }
   }, [state.midiBase64, handleStop, startBgMp4]);
 
@@ -246,9 +263,10 @@ export default function LofiPage() {
                   <button
                     type="button"
                     onClick={() => void handlePlay()}
-                    className="px-4 py-2 bg-[#0f3460] text-[#a0c4ff] rounded-md text-sm hover:bg-[#1a4a80]"
+                    disabled={playPending}
+                    className="px-4 py-2 bg-[#0f3460] text-[#a0c4ff] rounded-md text-sm hover:bg-[#1a4a80] disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    Play
+                    {playPending ? 'Starting…' : 'Play'}
                   </button>
                   <button
                     type="button"
