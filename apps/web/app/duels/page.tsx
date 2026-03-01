@@ -380,7 +380,7 @@ export default function DuelsPage() {
               <div className="flex flex-col gap-3">
                 {lobbyState.playerCount === 2 && (
                   <Link
-                    href="/game"
+                    href={`/game?duel=${lobbyState.code}&role=${lobbyState.role}`}
                     className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg font-mono hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
                   >
                     Start Duel
