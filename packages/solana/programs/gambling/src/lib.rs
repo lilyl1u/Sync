@@ -43,9 +43,11 @@ pub mod gambling {
         Ok(())
     }
 
-    /// Player pays buy-in and starts a live session.
+    /// Player pays buy-in and starts a live session (uses pool defaults).
     pub fn start_session(ctx: Context<StartSession>) -> Result<()> {
-        let buy_in = ctx.accounts.pool.buy_in_base_units;
+        let pool = &ctx.accounts.pool;
+        let buy_in = pool.buy_in_base_units;
+        let rate = pool.payout_rate_base_units_per_second;
         require!(buy_in > 0, GamblingError::InvalidAmount);
 
         let transfer_ctx = CpiContext::new(
@@ -64,6 +66,7 @@ pub mod gambling {
         session.started_at = now;
         session.last_claimed_at = now;
         session.buy_in_paid = buy_in;
+        session.payout_rate = rate;
         session.bump = ctx.bumps.session;
 
         let pool = &mut ctx.accounts.pool;
@@ -72,10 +75,15 @@ pub mod gambling {
         Ok(())
     }
 
-    /// Player pays a custom buy-in amount (lamports) and starts a live session.
-    /// Used by duels where room bet can vary per match.
-    pub fn start_session_with_amount(ctx: Context<StartSession>, amount: u64) -> Result<()> {
+    /// Player pays a custom buy-in amount (lamports) with a custom payout rate
+    /// and starts a live session. Used for variable bets (duels + solo).
+    pub fn start_session_with_amount(
+        ctx: Context<StartSession>,
+        amount: u64,
+        payout_rate: u64,
+    ) -> Result<()> {
         require!(amount > 0, GamblingError::InvalidAmount);
+        require!(payout_rate > 0, GamblingError::InvalidAmount);
 
         let transfer_ctx = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -93,6 +101,7 @@ pub mod gambling {
         session.started_at = now;
         session.last_claimed_at = now;
         session.buy_in_paid = amount;
+        session.payout_rate = payout_rate;
         session.bump = ctx.bumps.session;
 
         let pool = &mut ctx.accounts.pool;
@@ -102,17 +111,22 @@ pub mod gambling {
     }
 
     /// Player extracts while alive. Client sends the exact amount (lamports) to pull from the vault.
-    /// Program validates: 0 < amount <= max_payout (buy_in + max_elapsed * rate).
+    /// Program validates: 0 < amount <= max_payout (buy_in + max_elapsed * session_rate).
     pub fn extract(ctx: Context<Extract>, amount: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let session = &mut ctx.accounts.session;
-        let pool = &ctx.accounts.pool;
 
         require!(amount > 0, GamblingError::InvalidAmount);
 
+        let rate = if session.payout_rate > 0 {
+            session.payout_rate
+        } else {
+            ctx.accounts.pool.payout_rate_base_units_per_second
+        };
+
         let max_elapsed = elapsed_seconds(session.last_claimed_at, now)?;
         let max_winnings = max_elapsed
-            .checked_mul(pool.payout_rate_base_units_per_second)
+            .checked_mul(rate)
             .ok_or(GamblingError::MathOverflow)?;
         let max_payout = session
             .buy_in_paid
@@ -136,6 +150,28 @@ pub mod gambling {
 
     /// Player died; session is closed and buy-in is forfeited.
     pub fn record_death(_ctx: Context<RecordDeath>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Close a session PDA that can't be deserialized (layout migration).
+    /// Drains lamports to vault and zeroes the account data.
+    pub fn close_legacy_session(ctx: Context<CloseLegacySession>) -> Result<()> {
+        let session_info = &ctx.accounts.session;
+        let vault_info = &ctx.accounts.vault;
+
+        let lamports = session_info.lamports();
+        **session_info.to_account_info().try_borrow_mut_lamports()? = 0;
+        **vault_info.to_account_info().try_borrow_mut_lamports()? = vault_info
+            .to_account_info()
+            .lamports()
+            .checked_add(lamports)
+            .ok_or(GamblingError::MathOverflow)?;
+
+        session_info.to_account_info().realloc(0, false)?;
+        session_info
+            .to_account_info()
+            .assign(&anchor_lang::solana_program::system_program::ID);
+
         Ok(())
     }
 }
@@ -278,6 +314,33 @@ pub struct RecordDeath<'info> {
     pub player: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct CloseLegacySession<'info> {
+    #[account(
+        seeds = [b"pool", pool.authority.as_ref()],
+        bump = pool.pool_bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    #[account(
+        mut,
+        seeds = [b"vault", pool.key().as_ref()],
+        bump = pool.vault_bump
+    )]
+    pub vault: Account<'info, Vault>,
+
+    /// CHECK: Legacy session PDA — verified by seeds constraint, not deserialized.
+    #[account(
+        mut,
+        seeds = [b"session", pool.key().as_ref(), player.key().as_ref()],
+        bump,
+    )]
+    pub session: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Pool {
@@ -305,6 +368,7 @@ pub struct Session {
     pub started_at: i64,
     pub last_claimed_at: i64,
     pub buy_in_paid: u64,
+    pub payout_rate: u64,
     pub bump: u8,
 }
 

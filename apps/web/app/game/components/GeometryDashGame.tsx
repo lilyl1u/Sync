@@ -16,7 +16,6 @@ import { Connection, PublicKey, type Transaction } from '@solana/web3.js';
 import {
   estimateEarnedBaseUnits,
   extractOnChain,
-  fetchPoolConfig,
   getExtractParams,
   recordDeathOnChain,
   startSessionOnChain,
@@ -222,6 +221,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const [poolConfig, setPoolConfig] = useState<PoolConfig | null>(null);
   const [frozenEarned, setFrozenEarned] = useState<bigint | null>(null);
   const [duelClaimAmount, setDuelClaimAmount] = useState<bigint | null>(null);
+  const [soloBetInput, setSoloBetInput] = useState('0.005');
+  const [soloBetLamports, setSoloBetLamports] = useState<bigint | null>(null);
   const [terrainSeed, setTerrainSeed] = useState<number | null>(null);
   const [vrfRequestTx, setVrfRequestTx] = useState<string | null>(null);
   const [isRequestingVrf, setIsRequestingVrf] = useState(false);
@@ -627,6 +628,38 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     }
   }, [walletProviderName, lobbyData?.bet]);
 
+  const duelRefund = useCallback(async () => {
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey || hasSettledCurrentRunRef.current) return;
+    hasSettledCurrentRunRef.current = true;
+    setIsSettling(true);
+    setErrorMessage(null);
+    setStatusMessage(`Refunding bet – confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`);
+    try {
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const betAmount = BigInt(lobbyData?.bet ?? '0');
+      const params = await getExtractParams(connectionRef.current, provider.publicKey, 9999);
+      const refundAmount = params.payoutBaseUnits < betAmount ? params.payoutBaseUnits : betAmount;
+      if (refundAmount <= 0n) {
+        throw new Error('Refund amount is zero');
+      }
+      setDuelClaimAmount(refundAmount);
+      const signature = await extractOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+        payoutBaseUnits: refundAmount,
+      });
+      setSettleSignature(signature);
+      setStatusMessage(`Refunded ${formatSol(refundAmount)} SOL`);
+    } catch (err) {
+      hasSettledCurrentRunRef.current = false;
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to refund');
+      setStatusMessage(null);
+    } finally {
+      setIsSettling(false);
+    }
+  }, [walletProviderName, lobbyData?.bet]);
+
   const handleConnectWallet = useCallback(async (target: 'phantom' | 'privy') => {
     if (target === 'privy') {
       setAutoStartAfterPrivyConnect(true);
@@ -677,18 +710,19 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       if (betBaseUnits <= 0n) {
         throw new Error('Invalid duel bet amount.');
       }
+      const duelRate = betBaseUnits / 15n || 1n;
       const signature = await startSessionWithAmountOnChain({
         connection: connectionRef.current,
         wallet: provider,
         amountBaseUnits: betBaseUnits,
+        payoutRateBaseUnits: duelRate,
       });
       setBuyInSignature(signature);
       setStatusMessage('Confirming on chain...');
       await connectionRef.current.confirmTransaction(signature, 'confirmed');
-      const config = await fetchPoolConfig(connectionRef.current);
       setPoolConfig({
-        ...config,
         buyInBaseUnits: betBaseUnits,
+        payoutRateBaseUnitsPerSecond: duelRate,
       });
 
       const lobbyRef = doc(db, 'lobbies', duelCode);
@@ -853,21 +887,31 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   // Duel: detect opponent death → stop local game, show YOU WIN
   // ------------------------------------------------------------------
   useEffect(() => {
-    if (!isDuelMode || !hasStarted || isGameOver || !lobbyData) return;
+    if (!isDuelMode || !hasStarted || !lobbyData) return;
+    if (opponentDiedHandledRef.current) return;
+    const myStatus = role === 'host' ? lobbyData.hostStatus : lobbyData.joinerStatus;
     const opponentStatus = role === 'host' ? lobbyData.joinerStatus : lobbyData.hostStatus;
-    if (opponentStatus === 'died' && !opponentDiedHandledRef.current) {
+
+    if (opponentStatus === 'died') {
       opponentDiedHandledRef.current = true;
       const engine = engineRef.current;
       if (engine) engine.pause();
       stopAudio();
       const elapsed = getElapsedSeconds(engine?.getState() ?? null);
-      setIsGameOver(true);
-      void writeDuelSurvival(elapsed, 'extracted');
-      const lobbyRef = doc(db, 'lobbies', duelCode!);
-      void updateDoc(lobbyRef, { winner: role, status: 'finished' });
-      void duelClaimPot();
+      if (!isGameOver) setIsGameOver(true);
+
+      if (myStatus === 'died') {
+        const lobbyRef = doc(db, 'lobbies', duelCode!);
+        void updateDoc(lobbyRef, { winner: null, status: 'finished' });
+        void duelRefund();
+      } else {
+        void writeDuelSurvival(elapsed, 'extracted');
+        const lobbyRef = doc(db, 'lobbies', duelCode!);
+        void updateDoc(lobbyRef, { winner: role, status: 'finished' });
+        void duelClaimPot();
+      }
     }
-  }, [isDuelMode, hasStarted, isGameOver, lobbyData, role, duelCode, stopAudio, writeDuelSurvival, duelClaimPot]);
+  }, [isDuelMode, hasStarted, isGameOver, lobbyData, role, duelCode, stopAudio, writeDuelSurvival, duelClaimPot, duelRefund]);
 
   const handlePayAndStart = useCallback(async () => {
     if (hasStarted || !walletAddress) return;
@@ -902,17 +946,30 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         setIsRequestingVrf(false);
       }
 
+      const betStr = soloBetInput.trim();
+      const betSol = parseFloat(betStr);
+      if (!betStr || !Number.isFinite(betSol) || betSol <= 0) {
+        throw new Error('Enter a valid SOL bet amount.');
+      }
+      const betLamports = BigInt(Math.round(betSol * 1e9));
+      const ratePerSec = betLamports / 15n || 1n;
+      setSoloBetLamports(betLamports);
+
       setStatusMessage('Submitting on-chain start transaction...');
-      const signature = await startSessionOnChain({
+      const signature = await startSessionWithAmountOnChain({
         connection: connectionRef.current,
         wallet: provider,
+        amountBaseUnits: betLamports,
+        payoutRateBaseUnits: ratePerSec,
       });
       setBuyInSignature(signature);
       setStatusMessage('Waiting for on-chain confirmation...');
       await connectionRef.current.confirmTransaction(signature, 'confirmed');
 
-      const config = await fetchPoolConfig(connectionRef.current);
-      setPoolConfig(config);
+      setPoolConfig({
+        buyInBaseUnits: betLamports,
+        payoutRateBaseUnitsPerSecond: ratePerSec,
+      });
 
       setSettleSignature(null);
       setFrozenEarned(null);
@@ -934,7 +991,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     } finally {
       setIsPayingBuyIn(false);
     }
-  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine, isDuelMode]);
+  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine, isDuelMode, soloBetInput]);
 
   useEffect(() => {
     if (!autoStartAfterPrivyConnect) return;
@@ -1045,6 +1102,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     setSettleSignature(null);
     setFrozenEarned(null);
     setDuelClaimAmount(null);
+    setSoloBetLamports(null);
     setPoolConfig(null);
     setTerrainSeed(null);
     setVrfRequestTx(null);
@@ -1182,9 +1240,34 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 Wallet: {formatSolBalance(walletBalanceLamports)} SOL
               </p>
             )}
-            {!isDuelMode && (
+            {!isDuelMode && walletAddress && (
+              <div className="mb-4 w-full max-w-xs mx-auto">
+                <label className="block text-purple-200 text-sm font-mono mb-1">Bet amount (SOL)</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  value={soloBetInput}
+                  onChange={(e) => setSoloBetInput(e.target.value)}
+                  placeholder="e.g. 0.005"
+                  className="w-full px-4 py-2 bg-black/50 border border-purple-500/50 rounded-lg text-white font-mono placeholder:text-purple-400/50 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent text-center"
+                />
+                {(() => {
+                  const val = parseFloat(soloBetInput);
+                  if (soloBetInput.trim() && Number.isFinite(val) && val > 0) {
+                    const rateLam = BigInt(Math.round(val * 1e9)) / 15n || 1n;
+                    return (
+                      <p className="text-purple-300 mt-2 font-mono text-sm">
+                        Rate: {formatSol(rateLam)} SOL/sec (break even in 15s)
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
+            )}
+            {!isDuelMode && !walletAddress && (
               <p className="text-purple-300 mb-6 max-w-md font-mono text-sm">
-                Rate: {formatSol(ratePerSec)} SOL/sec
+                Connect wallet to set your bet.
               </p>
             )}
             {isDuelMode && lobbyData?.bet && (
@@ -1282,7 +1365,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     ? 'Requesting VRF...'
                     : isPayingBuyIn
                       ? `Confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`
-                      : 'Pay Buy-In & Start'}
+                      : `Bet ${soloBetInput.trim() || '?'} SOL & Start`}
                 </button>
               )}
             </div>
@@ -1401,9 +1484,11 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           )}
 
           {isDuelMode && (isGameOver || hasExtracted) && (() => {
+            const myStatus = role === 'host' ? lobbyData?.hostStatus : lobbyData?.joinerStatus;
             const opponentStatus = role === 'host' ? lobbyData?.joinerStatus : lobbyData?.hostStatus;
-            const iDied = (role === 'host' ? lobbyData?.hostStatus : lobbyData?.joinerStatus) === 'died';
+            const iDied = myStatus === 'died';
             const opponentDied = opponentStatus === 'died';
+            const isTie = iDied && opponentDied;
             const iWon = opponentDied && !iDied;
             const iLost = iDied && !opponentDied;
             const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
@@ -1414,16 +1499,20 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 <div className={`p-12 rounded-2xl border-2 shadow-2xl max-w-lg ${
                   iWon
                     ? 'bg-gradient-to-br from-purple-900/90 to-green-900/90 border-green-500 shadow-green-500/50'
-                    : 'bg-gradient-to-br from-purple-900/90 to-red-900/90 border-red-500 shadow-red-500/50'
+                    : isTie
+                      ? 'bg-gradient-to-br from-purple-900/90 to-yellow-900/90 border-yellow-500 shadow-yellow-500/50'
+                      : 'bg-gradient-to-br from-purple-900/90 to-red-900/90 border-red-500 shadow-red-500/50'
                 }`}>
                   <h2 className={`text-6xl font-bold mb-6 text-center bg-clip-text text-transparent ${
                     iWon
                       ? 'bg-gradient-to-r from-green-300 to-cyan-300'
-                      : iLost
-                        ? 'bg-gradient-to-r from-red-300 to-pink-300'
-                        : 'bg-gradient-to-r from-purple-400 to-pink-400'
+                      : isTie
+                        ? 'bg-gradient-to-r from-yellow-300 to-orange-300'
+                        : iLost
+                          ? 'bg-gradient-to-r from-red-300 to-pink-300'
+                          : 'bg-gradient-to-r from-purple-400 to-pink-400'
                   }`}>
-                    {iWon ? 'YOU WIN!' : iLost ? 'YOU LOSE' : 'Waiting...'}
+                    {iWon ? 'YOU WIN!' : isTie ? 'DRAW!' : iLost ? 'YOU LOSE' : 'Waiting...'}
                   </h2>
                   <div className="text-center mb-6">
                     {iWon ? (
@@ -1444,6 +1533,30 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                         {settleSignature && (
                           <div className="text-emerald-400 font-mono text-sm mt-1">
                             Pot claimed!
+                          </div>
+                        )}
+                        {errorMessage && !settleSignature && !isSettling && (
+                          <div className="text-red-300 font-mono text-sm mt-1">
+                            {errorMessage}
+                          </div>
+                        )}
+                      </>
+                    ) : isTie ? (
+                      <>
+                        <div className="text-yellow-300 font-bold text-xl mb-2">
+                          Both died! Each player gets their bet back.
+                        </div>
+                        <div className="text-yellow-200/80 font-mono text-sm mb-1">
+                          Refund: {formatSol(duelClaimAmount ?? betBaseUnits)} SOL
+                        </div>
+                        {isSettling && (
+                          <div className="text-cyan-300 font-mono text-sm animate-pulse">
+                            Refunding – confirm in wallet...
+                          </div>
+                        )}
+                        {settleSignature && (
+                          <div className="text-emerald-400 font-mono text-sm mt-1">
+                            Refund complete!
                           </div>
                         )}
                         {errorMessage && !settleSignature && !isSettling && (
@@ -1474,6 +1587,14 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                         className="w-full px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
                       >
                         Claim Pot
+                      </button>
+                    )}
+                    {isTie && !settleSignature && !isSettling && (
+                      <button
+                        onClick={() => void duelRefund()}
+                        className="w-full px-8 py-4 bg-gradient-to-r from-yellow-600 to-orange-600 text-white font-bold rounded-lg hover:from-yellow-500 hover:to-orange-500 transition-all shadow-lg text-center"
+                      >
+                        Claim Refund
                       </button>
                     )}
                     <Link
