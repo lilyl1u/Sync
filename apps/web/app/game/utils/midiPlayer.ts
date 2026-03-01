@@ -12,8 +12,9 @@ let midiPlayerInstance: {
 
 function getMidiPlayer() {
   if (!midiPlayerInstance) {
+    const synth = new Tone.PolySynth().toDestination();
     midiPlayerInstance = {
-      synth: new Tone.PolySynth().toDestination(),
+      synth,
       scheduledId: 0,
     };
   }
@@ -29,8 +30,10 @@ function midiToNoteName(midi: number): string {
 }
 
 export async function playMidi(midiBase64: string): Promise<void> {
-  const { synth, scheduledId } = getMidiPlayer();
+  const { synth } = getMidiPlayer();
   synth.sync().releaseAll();
+  // Ensure output is connected (in case we were disconnected by stopMidi)
+  synth.toDestination();
 
   const bytes = Uint8Array.from(atob(midiBase64), (c) => c.charCodeAt(0));
   const midi = new Midi(bytes.buffer);
@@ -55,6 +58,8 @@ export function stopMidi(): void {
   const player = midiPlayerInstance;
   if (player) {
     player.synth.releaseAll();
+    // Disconnect so any already-scheduled notes are inaudible
+    player.synth.disconnect();
   }
 }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Midi } from '@tonejs/midi';
 
-const LOFI_MODAL_API_URL = process.env.LOFI_MODAL_API_URL?.replace(/\/$/, '');
+const LOFI_MODAL_API_URL = 'https://michellee-wang--lofi-generator-api.modal.run'.replace(/\/$/, '');
 
 export interface GenerateLofiResponse {
   beats: number[];
@@ -37,13 +37,6 @@ function midiToBeats(midiBytes: ArrayBuffer): { beats: number[]; intensities: nu
 }
 
 export async function POST(request: NextRequest) {
-  if (!LOFI_MODAL_API_URL) {
-    return NextResponse.json(
-      { error: 'LOFI_MODAL_API_URL is not configured' },
-      { status: 500 }
-    );
-  }
-
   try {
     let weights: string | undefined;
     let length = 200;
