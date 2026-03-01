@@ -17,7 +17,10 @@ import {
   estimateEarnedBaseUnits,
   extractOnChain,
   fetchPoolConfig,
+  getExtractParams,
+  recordDeathOnChain,
   startSessionOnChain,
+  startSessionWithAmountOnChain,
   type PoolConfig,
 } from '@/lib/gamblingClient';
 import { RPC_URL } from '@/lib/solana';
@@ -37,6 +40,10 @@ type DuelLobbyData = {
   joinerStatus?: 'playing' | 'died' | 'extracted';
   winner?: 'host' | 'joiner' | null;
   bet?: string;
+  hostReady?: boolean;
+  joinerReady?: boolean;
+  hostWallet?: string | null;
+  joinerWallet?: string | null;
 };
 
 const PLAYER_SPEED = 300;
@@ -214,6 +221,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const [displayElapsedFallback, setDisplayElapsedFallback] = useState(0);
   const [poolConfig, setPoolConfig] = useState<PoolConfig | null>(null);
   const [frozenEarned, setFrozenEarned] = useState<bigint | null>(null);
+  const [duelClaimAmount, setDuelClaimAmount] = useState<bigint | null>(null);
   const [terrainSeed, setTerrainSeed] = useState<number | null>(null);
   const [vrfRequestTx, setVrfRequestTx] = useState<string | null>(null);
   const [isRequestingVrf, setIsRequestingVrf] = useState(false);
@@ -221,7 +229,12 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
 
   // Duel mode: lobby state from Firestore
   const [lobbyData, setLobbyData] = useState<DuelLobbyData | null>(null);
+  const [duelCountdown, setDuelCountdown] = useState<number | null>(null);
   const duelLobbyUnsubRef = useRef<(() => void) | null>(null);
+  const opponentDiedHandledRef = useRef(false);
+  const countdownTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const countdownInitiatedRef = useRef(false);
+  const duelReadyInFlightRef = useRef(false);
 
   useEffect(() => {
     solanaWalletsRef.current = solanaWallets;
@@ -581,6 +594,39 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     [walletAddress, walletProviderName],
   );
 
+  const duelClaimPot = useCallback(async () => {
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey || hasSettledCurrentRunRef.current) return;
+    hasSettledCurrentRunRef.current = true;
+    setIsSettling(true);
+    setErrorMessage(null);
+    setStatusMessage(`Claiming pot – confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`);
+    try {
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const betAmount = BigInt(lobbyData?.bet ?? '0');
+      const potAmount = betAmount * 2n;
+      const params = await getExtractParams(connectionRef.current, provider.publicKey, 9999);
+      const payoutBaseUnits = params.payoutBaseUnits < potAmount ? params.payoutBaseUnits : potAmount;
+      if (payoutBaseUnits <= 0n) {
+        throw new Error('Claimable amount is zero');
+      }
+      setDuelClaimAmount(payoutBaseUnits);
+      const signature = await extractOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+        payoutBaseUnits,
+      });
+      setSettleSignature(signature);
+      setStatusMessage(`Claimed ${formatSol(payoutBaseUnits)} SOL`);
+    } catch (err) {
+      hasSettledCurrentRunRef.current = false;
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to claim pot');
+      setStatusMessage(null);
+    } finally {
+      setIsSettling(false);
+    }
+  }, [walletProviderName, lobbyData?.bet]);
+
   const handleConnectWallet = useCallback(async (target: 'phantom' | 'privy') => {
     if (target === 'privy') {
       setAutoStartAfterPrivyConnect(true);
@@ -607,6 +653,95 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     },
     [duelCode, role],
   );
+
+  // ------------------------------------------------------------------
+  // Duel: press "I'm Ready"
+  // ------------------------------------------------------------------
+  const handleDuelReady = useCallback(async () => {
+    if (!duelCode || !role || !walletAddress) return;
+    if (duelReadyInFlightRef.current) return;
+    const myReady = role === 'host' ? lobbyData?.hostReady : lobbyData?.joinerReady;
+    if (myReady) return;
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey) {
+      setErrorMessage('Wallet not connected.');
+      return;
+    }
+    setErrorMessage(null);
+    duelReadyInFlightRef.current = true;
+    setIsPayingBuyIn(true);
+    setStatusMessage('Confirm your bet in wallet...');
+    try {
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
+      if (betBaseUnits <= 0n) {
+        throw new Error('Invalid duel bet amount.');
+      }
+      const signature = await startSessionWithAmountOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+        amountBaseUnits: betBaseUnits,
+      });
+      setBuyInSignature(signature);
+      setStatusMessage('Confirming on chain...');
+      await connectionRef.current.confirmTransaction(signature, 'confirmed');
+      const config = await fetchPoolConfig(connectionRef.current);
+      setPoolConfig({
+        ...config,
+        buyInBaseUnits: betBaseUnits,
+      });
+
+      const lobbyRef = doc(db, 'lobbies', duelCode);
+      const readyField = role === 'host' ? 'hostReady' : 'joinerReady';
+      const walletField = role === 'host' ? 'hostWallet' : 'joinerWallet';
+      await updateDoc(lobbyRef, { [readyField]: true, [walletField]: walletAddress });
+      setStatusMessage('Bet paid! Waiting for opponent...');
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to pay bet');
+      setStatusMessage(null);
+    } finally {
+      duelReadyInFlightRef.current = false;
+      setIsPayingBuyIn(false);
+    }
+  }, [duelCode, role, walletAddress, lobbyData?.hostReady, lobbyData?.joinerReady, lobbyData?.bet]);
+
+  // ------------------------------------------------------------------
+  // Duel: when both ready, host triggers VRF → countdown
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!isDuelMode || role !== 'host' || !lobbyData) return;
+    if (!lobbyData.hostReady || !lobbyData.joinerReady) return;
+    if (lobbyData.status === 'countdown' || lobbyData.status === 'playing' || lobbyData.status === 'finished') return;
+
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey) return;
+
+    let cancelled = false;
+    (async () => {
+      setIsRequestingVrf(true);
+      setStatusMessage('Both ready! Generating terrain...');
+      try {
+        if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+        const vrfResult = await requestAndWaitFulfilled(connectionRef.current, provider);
+        if (cancelled) return;
+        setTerrainSeed(vrfResult.seed);
+        setVrfRequestTx(vrfResult.requestTx);
+        const lobbyRef = doc(db, 'lobbies', duelCode!);
+        await updateDoc(lobbyRef, {
+          terrainSeed: vrfResult.seed,
+          status: 'countdown',
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMessage(err instanceof Error ? err.message : 'VRF failed');
+          setStatusMessage(null);
+        }
+      } finally {
+        if (!cancelled) setIsRequestingVrf(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isDuelMode, role, lobbyData?.hostReady, lobbyData?.joinerReady, lobbyData?.status, duelCode]);
 
   const buildLevelAndEngine = useCallback(
     (seed: number) => {
@@ -639,6 +774,10 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         if (duelCode && role) {
           const elapsed = getElapsedSeconds(engine.getState());
           void writeDuelSurvival(elapsed, 'died');
+          const wallet = activeWalletRef.current;
+          if (wallet?.publicKey && connectionRef.current) {
+            void recordDeathOnChain({ connection: connectionRef.current, wallet });
+          }
         }
       });
 
@@ -648,9 +787,91 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     [audioError, width, height, stopAudio, duelCode, role, writeDuelSurvival],
   );
 
+  // ------------------------------------------------------------------
+  // Duel: countdown 3-2-1 then start (timers stored in ref to survive status changes)
+  // ------------------------------------------------------------------
+  const startDuelEngine = useCallback((seed: number) => {
+    const newEngine = buildLevelAndEngine(seed);
+    if (!newEngine) return;
+    engineRef.current = newEngine;
+    opponentDiedHandledRef.current = false;
+    setSettleSignature(null);
+    setDuelClaimAmount(null);
+    setFrozenEarned(null);
+    frozenEarnedRef.current = null;
+    hasSettledCurrentRunRef.current = false;
+    setDisplayElapsedFallback(0);
+    setStatusMessage(null);
+    newEngine.start();
+    setHasStarted(true);
+    setIsGameOver(false);
+    setHasExtracted(false);
+    gameContainerRef.current?.focus();
+    if (audioLoaded) playAudio();
+    if (role === 'host' && duelCode) {
+      void updateDoc(doc(db, 'lobbies', duelCode), {
+        status: 'playing',
+        startedAt: serverTimestamp(),
+        hostStatus: 'playing',
+        joinerStatus: 'playing',
+      });
+    }
+  }, [buildLevelAndEngine, audioLoaded, playAudio, role, duelCode]);
+
+  useEffect(() => {
+    if (!isDuelMode || !lobbyData || hasStarted) return;
+    if (countdownInitiatedRef.current) return;
+
+    const seed = lobbyData.terrainSeed;
+    if (typeof seed !== 'number') return;
+
+    if (lobbyData.status === 'countdown') {
+      countdownInitiatedRef.current = true;
+      setTerrainSeed(seed);
+      setDuelCountdown(3);
+      countdownTimersRef.current = [
+        setTimeout(() => setDuelCountdown(2), 1000),
+        setTimeout(() => setDuelCountdown(1), 2000),
+        setTimeout(() => { setDuelCountdown(0); startDuelEngine(seed); }, 3000),
+        setTimeout(() => setDuelCountdown(null), 3600),
+      ];
+    } else if (lobbyData.status === 'playing') {
+      countdownInitiatedRef.current = true;
+      setTerrainSeed(seed);
+      startDuelEngine(seed);
+    }
+  }, [isDuelMode, lobbyData, hasStarted, startDuelEngine]);
+
+  useEffect(() => {
+    return () => {
+      countdownTimersRef.current.forEach(clearTimeout);
+      countdownTimersRef.current = [];
+    };
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Duel: detect opponent death → stop local game, show YOU WIN
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!isDuelMode || !hasStarted || isGameOver || !lobbyData) return;
+    const opponentStatus = role === 'host' ? lobbyData.joinerStatus : lobbyData.hostStatus;
+    if (opponentStatus === 'died' && !opponentDiedHandledRef.current) {
+      opponentDiedHandledRef.current = true;
+      const engine = engineRef.current;
+      if (engine) engine.pause();
+      stopAudio();
+      const elapsed = getElapsedSeconds(engine?.getState() ?? null);
+      setIsGameOver(true);
+      void writeDuelSurvival(elapsed, 'extracted');
+      const lobbyRef = doc(db, 'lobbies', duelCode!);
+      void updateDoc(lobbyRef, { winner: role, status: 'finished' });
+      void duelClaimPot();
+    }
+  }, [isDuelMode, hasStarted, isGameOver, lobbyData, role, duelCode, stopAudio, writeDuelSurvival, duelClaimPot]);
+
   const handlePayAndStart = useCallback(async () => {
     if (hasStarted || !walletAddress) return;
-    if (isDuelMode) return; // Duel mode uses handleDuelStart
+    if (isDuelMode) return;
     const provider = activeWalletRef.current;
     if (!provider?.publicKey) {
       setErrorMessage('Wallet disconnected. Please connect again.');
@@ -718,7 +939,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   useEffect(() => {
     if (!autoStartAfterPrivyConnect) return;
     if (!walletAddress || hasStarted || loadingAudio || isWalletConnecting || isPayingBuyIn || isRequestingVrf) return;
-    if (isDuelMode) return; // Duel mode uses handleDuelStart
+    if (isDuelMode) return;
 
     setAutoStartAfterPrivyConnect(false);
     setStatusMessage('Privy connected. Starting game...');
@@ -734,82 +955,6 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     isDuelMode,
     handlePayAndStart,
   ]);
-
-  // ------------------------------------------------------------------
-  // Duel mode: host starts (VRF + write to lobby) or joiner waits for lobby
-  // ------------------------------------------------------------------
-  const handleDuelStart = useCallback(async () => {
-    if (!duelCode || !role || hasStarted || loadingAudio) return;
-    if (role === 'host') {
-      const provider = activeWalletRef.current;
-      if (!provider?.publicKey) {
-        setErrorMessage('Connect wallet to start the duel.');
-        return;
-      }
-      setErrorMessage(null);
-      setIsRequestingVrf(true);
-      setStatusMessage('Requesting verified randomness...');
-      try {
-        if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
-        const vrfResult = await requestAndWaitFulfilled(connectionRef.current, provider);
-        setTerrainSeed(vrfResult.seed);
-        setVrfRequestTx(vrfResult.requestTx);
-        const lobbyRef = doc(db, 'lobbies', duelCode);
-        await updateDoc(lobbyRef, {
-          terrainSeed: vrfResult.seed,
-          startedAt: serverTimestamp(),
-          status: 'playing',
-          hostStatus: 'playing',
-          joinerStatus: 'playing',
-        });
-        const newEngine = buildLevelAndEngine(vrfResult.seed);
-        if (!newEngine) throw new Error('Failed to build level');
-        engineRef.current = newEngine;
-        setSettleSignature(null);
-        setFrozenEarned(null);
-        frozenEarnedRef.current = null;
-        hasSettledCurrentRunRef.current = false;
-        setDisplayElapsedFallback(0);
-        setStatusMessage('Duel started!');
-        newEngine.start();
-        setHasStarted(true);
-        setIsGameOver(false);
-        setHasExtracted(false);
-        gameContainerRef.current?.focus();
-        if (audioLoaded) playAudio();
-      } catch (err) {
-        setErrorMessage(err instanceof Error ? err.message : 'Failed to start duel');
-        setStatusMessage(null);
-      } finally {
-        setIsRequestingVrf(false);
-      }
-    }
-    // Joiner: started by effect when lobby has terrainSeed
-  }, [duelCode, role, hasStarted, loadingAudio, buildLevelAndEngine, audioLoaded, playAudio]);
-
-  // Joiner: auto-start when lobby has status 'playing' and terrainSeed
-  useEffect(() => {
-    if (!isDuelMode || role !== 'joiner' || hasStarted || loadingAudio || !lobbyData) return;
-    const seed = lobbyData.terrainSeed;
-    if (lobbyData.status !== 'playing' || typeof seed !== 'number') return;
-
-    const newEngine = buildLevelAndEngine(seed);
-    if (!newEngine) return;
-    engineRef.current = newEngine;
-    setTerrainSeed(seed);
-    setSettleSignature(null);
-    setFrozenEarned(null);
-    frozenEarnedRef.current = null;
-    hasSettledCurrentRunRef.current = false;
-    setDisplayElapsedFallback(0);
-    setStatusMessage('Duel started!');
-    newEngine.start();
-    setHasStarted(true);
-    setIsGameOver(false);
-    setHasExtracted(false);
-    gameContainerRef.current?.focus();
-    if (audioLoaded) playAudio();
-  }, [isDuelMode, role, hasStarted, loadingAudio, lobbyData, buildLevelAndEngine, audioLoaded, playAudio]);
 
   const FEE_BUFFER_LAMPORTS = 300_000n;
 
@@ -899,6 +1044,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     setBuyInSignature(null);
     setSettleSignature(null);
     setFrozenEarned(null);
+    setDuelClaimAmount(null);
     setPoolConfig(null);
     setTerrainSeed(null);
     setVrfRequestTx(null);
@@ -906,6 +1052,10 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     setErrorMessage(null);
     setDisplayElapsedFallback(0);
     hasSettledCurrentRunRef.current = false;
+    countdownInitiatedRef.current = false;
+    countdownTimersRef.current.forEach(clearTimeout);
+    countdownTimersRef.current = [];
+    setDuelCountdown(null);
     gameContainerRef.current?.focus();
   }, [cancelExtractHold, stopAudio]);
 
@@ -923,8 +1073,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       if (e.key === 'Enter' && !hasStarted && !loadingAudio) {
         e.preventDefault();
         if (isDuelMode) {
-          if (role === 'host' && walletAddress) void handleDuelStart();
-          else if (role === 'host' && !walletAddress) void handleConnectWallet('phantom');
+          if (walletAddress) void handleDuelReady();
+          else void handleConnectWallet('phantom');
         } else {
           if (walletAddress) void handlePayAndStart();
           else void handleConnectWallet('phantom');
@@ -945,7 +1095,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       window.removeEventListener('keydown', handleKeyPress);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [cancelExtractHold, handleConnectWallet, handlePayAndStart, handleDuelStart, handleRestart, hasExtracted, hasStarted, isGameOver, startExtractHold, walletAddress, loadingAudio, isDuelMode, role]);
+  }, [cancelExtractHold, handleConnectWallet, handlePayAndStart, handleDuelReady, handleRestart, hasExtracted, hasStarted, isGameOver, startExtractHold, walletAddress, loadingAudio, isDuelMode, role]);
 
   // Compute the live earned value (only used while playing, NOT after extract)
   const liveEarned: bigint | null = (gameState && hasStarted && !isGameOver && !hasExtracted)
@@ -971,6 +1121,20 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       className="relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none"
       aria-label="Game"
     >
+      {/* Duel countdown overlay */}
+      {duelCountdown !== null && duelCountdown > 0 && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="text-9xl font-bold text-white animate-ping" style={{ animationDuration: '0.8s' }}>
+            {duelCountdown}
+          </div>
+        </div>
+      )}
+      {duelCountdown === 0 && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
+          <div className="text-7xl font-bold text-emerald-400 animate-pulse">GO!</div>
+        </div>
+      )}
+
       <div className="relative" style={{ width, height }}>
         <canvas
           ref={canvasRef}
@@ -1005,22 +1169,15 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
               {loadingAudio
                 ? 'Loading Audio...'
                 : isDuelMode
-                  ? role === 'host'
-                    ? 'Start the Duel'
-                    : 'Waiting for Host'
+                  ? 'Duel Arena'
                   : 'Ready to Play?'}
             </h2>
             <p className="text-purple-200 mb-3 max-w-md">
               {isDuelMode
-                ? 'Survive longer than your opponent to win. Hold E to extract.'
+                ? 'Both players must ready up. First to die loses the pot.'
                 : 'Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.'}
             </p>
-            {!isDuelMode && walletBalanceLamports !== null && (
-              <p className="text-emerald-400 font-semibold mb-2 font-mono">
-                Wallet: {formatSolBalance(walletBalanceLamports)} SOL
-              </p>
-            )}
-            {isDuelMode && role === 'host' && walletBalanceLamports !== null && (
+            {walletBalanceLamports !== null && (
               <p className="text-emerald-400 font-semibold mb-2 font-mono">
                 Wallet: {formatSolBalance(walletBalanceLamports)} SOL
               </p>
@@ -1030,47 +1187,72 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 Rate: {formatSol(ratePerSec)} SOL/sec
               </p>
             )}
-            {isDuelMode && role === 'joiner' && (
-              <p className="text-purple-300 mb-6 max-w-md font-mono text-sm">
-                The game will start when the host begins.
+            {isDuelMode && lobbyData?.bet && (
+              <p className="text-purple-300 mb-4 max-w-md font-mono text-sm">
+                Pot: {formatSol(BigInt(lobbyData.bet) * 2n)} SOL ({formatSol(BigInt(lobbyData.bet))} SOL each)
               </p>
+            )}
+            {/* Duel: ready status indicators */}
+            {isDuelMode && walletAddress && (
+              <div className="mb-6 space-y-2">
+                <div className="flex items-center justify-center gap-3">
+                  <div className={`w-3 h-3 rounded-full ${lobbyData?.hostReady ? 'bg-green-400' : 'bg-gray-500'}`} />
+                  <span className="text-white font-mono text-sm">Host {lobbyData?.hostReady ? '- READY' : '- Not ready'}</span>
+                </div>
+                <div className="flex items-center justify-center gap-3">
+                  <div className={`w-3 h-3 rounded-full ${lobbyData?.joinerReady ? 'bg-green-400' : 'bg-gray-500'}`} />
+                  <span className="text-white font-mono text-sm">Joiner {lobbyData?.joinerReady ? '- READY' : '- Not ready'}</span>
+                </div>
+              </div>
             )}
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               {isDuelMode ? (
-                role === 'host' ? (
-                  !walletAddress ? (
-                    <>
-                      <button
-                        onClick={() => void handleConnectWallet('phantom')}
-                        disabled={isWalletConnecting || loadingAudio}
-                        className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
-                      </button>
-                      <button
-                        onClick={() => void handleConnectWallet('privy')}
-                        disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
-                        className="px-8 py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-lg hover:from-cyan-500 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/30 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {isWalletConnecting && walletConnectTarget === 'privy'
-                          ? 'Signing in with email...'
-                          : 'Use Email (Privy)'}
-                      </button>
-                    </>
-                  ) : (
+                !walletAddress ? (
+                  <>
                     <button
-                      onClick={() => void handleDuelStart()}
-                      disabled={isRequestingVrf || loadingAudio}
+                      onClick={() => void handleConnectWallet('phantom')}
+                      disabled={isWalletConnecting || loadingAudio}
+                      className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
+                    </button>
+                    <button
+                      onClick={() => void handleConnectWallet('privy')}
+                      disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
+                      className="px-8 py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-lg hover:from-cyan-500 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/30 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isWalletConnecting && walletConnectTarget === 'privy'
+                        ? 'Signing in with email...'
+                        : 'Use Email (Privy)'}
+                    </button>
+                  </>
+                ) : (() => {
+                  const myReady = role === 'host' ? lobbyData?.hostReady : lobbyData?.joinerReady;
+                  const opponentReady = role === 'host' ? lobbyData?.joinerReady : lobbyData?.hostReady;
+                  if (myReady && opponentReady) {
+                    return (
+                      <div className="text-emerald-400 font-mono font-bold py-4 animate-pulse">
+                        {isRequestingVrf ? 'Generating terrain...' : 'Starting countdown...'}
+                      </div>
+                    );
+                  }
+                  if (myReady) {
+                    return (
+                      <div className="text-emerald-400 font-mono font-bold py-4 animate-pulse">
+                        Waiting for opponent to ready up...
+                      </div>
+                    );
+                  }
+                  return (
+                    <button
+                      onClick={() => void handleDuelReady()}
+                      disabled={loadingAudio || isPayingBuyIn}
                       className="px-12 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-xl disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      {isRequestingVrf ? 'Requesting VRF...' : 'Start Duel'}
+                      {isPayingBuyIn ? 'Confirm in wallet...' : "I'm Ready"}
                     </button>
-                  )
-                ) : (
-                  <div className="text-purple-300 font-mono text-sm py-4">
-                    {lobbyData?.status === 'playing' ? 'Starting...' : 'Waiting for host to start...'}
-                  </div>
-                )
+                  );
+                })()
               ) : !walletAddress ? (
                 <>
                   <button
@@ -1218,83 +1400,93 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             </div>
           )}
 
-          {isDuelMode && (isGameOver || hasExtracted) && (
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
-              <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50 max-w-lg">
-                {(() => {
-                  const hostDone = lobbyData?.hostStatus === 'died' || lobbyData?.hostStatus === 'extracted';
-                  const joinerDone = lobbyData?.joinerStatus === 'died' || lobbyData?.joinerStatus === 'extracted';
-                  const bothDone = hostDone && joinerDone;
-                  const hostTime = lobbyData?.hostSurvivalTime ?? 0;
-                  const joinerTime = lobbyData?.joinerSurvivalTime ?? 0;
-                  // Winner = whoever survives longer; payout = sum of both bets (full pot)
-                  const hostWins = hostTime >= joinerTime;
-                  const localWon = (role === 'host' && hostWins) || (role === 'joiner' && !hostWins);
-                  const isDraw = hostTime === joinerTime;
+          {isDuelMode && (isGameOver || hasExtracted) && (() => {
+            const opponentStatus = role === 'host' ? lobbyData?.joinerStatus : lobbyData?.hostStatus;
+            const iDied = (role === 'host' ? lobbyData?.hostStatus : lobbyData?.joinerStatus) === 'died';
+            const opponentDied = opponentStatus === 'died';
+            const iWon = opponentDied && !iDied;
+            const iLost = iDied && !opponentDied;
+            const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
+            const potBaseUnits = betBaseUnits * 2n;
 
-                  if (!bothDone) {
-                    return (
+            return (
+              <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
+                <div className={`p-12 rounded-2xl border-2 shadow-2xl max-w-lg ${
+                  iWon
+                    ? 'bg-gradient-to-br from-purple-900/90 to-green-900/90 border-green-500 shadow-green-500/50'
+                    : 'bg-gradient-to-br from-purple-900/90 to-red-900/90 border-red-500 shadow-red-500/50'
+                }`}>
+                  <h2 className={`text-6xl font-bold mb-6 text-center bg-clip-text text-transparent ${
+                    iWon
+                      ? 'bg-gradient-to-r from-green-300 to-cyan-300'
+                      : iLost
+                        ? 'bg-gradient-to-r from-red-300 to-pink-300'
+                        : 'bg-gradient-to-r from-purple-400 to-pink-400'
+                  }`}>
+                    {iWon ? 'YOU WIN!' : iLost ? 'YOU LOSE' : 'Waiting...'}
+                  </h2>
+                  <div className="text-center mb-6">
+                    {iWon ? (
                       <>
-                        <h2 className="text-3xl font-bold text-white mb-4 text-center">
-                          {hasExtracted ? 'You extracted!' : 'You died'}
-                        </h2>
-                        <p className="text-purple-300 text-center font-mono mb-6">
-                          Waiting for opponent to finish...
-                        </p>
-                        <div className="text-purple-200/80 text-sm text-center font-mono">
-                          Your time: {formatSessionTime(Math.max(getElapsedSeconds(gameState), displayElapsedFallback))}
+                        <div className="text-emerald-300 font-bold text-2xl mb-2">
+                          You win: {formatSol(duelClaimAmount ?? potBaseUnits)} SOL
                         </div>
+                        {duelClaimAmount !== null && duelClaimAmount < potBaseUnits && (
+                          <div className="text-purple-300/80 font-mono text-xs mb-2">
+                            Capped by current on-chain claimable amount.
+                          </div>
+                        )}
+                        {isSettling && (
+                          <div className="text-cyan-300 font-mono text-sm animate-pulse">
+                            Claiming pot – confirm in wallet...
+                          </div>
+                        )}
+                        {settleSignature && (
+                          <div className="text-emerald-400 font-mono text-sm mt-1">
+                            Pot claimed!
+                          </div>
+                        )}
+                        {errorMessage && !settleSignature && !isSettling && (
+                          <div className="text-red-300 font-mono text-sm mt-1">
+                            {errorMessage}
+                          </div>
+                        )}
                       </>
-                    );
-                  }
-
-                  const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
-                  const potBaseUnits = betBaseUnits * 2n;
-
-                  return (
-                    <>
-                      <h2 className="text-5xl font-bold mb-6 text-center bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400">
-                        {isDraw ? 'Draw!' : localWon ? 'You won!' : 'You lost!'}
-                      </h2>
-                      <div className="text-center mb-6">
-                        <div className="text-emerald-300 font-bold text-xl mb-2">
-                          {localWon && !isDraw
-                            ? `You win the full pot: ${formatSol(potBaseUnits)} SOL`
-                            : !isDraw
-                              ? `Winner takes the full pot: ${formatSol(potBaseUnits)} SOL`
-                              : 'Pot split on draw'}
-                        </div>
-                        <p className="text-purple-300/80 text-sm font-mono">
-                          Winner takes the sum of both bets.
-                        </p>
+                    ) : iLost ? (
+                      <div className="text-red-300 font-bold text-xl mb-2">
+                        You died first. Opponent wins the pot.
                       </div>
-                      <div className="text-center mb-8 space-y-2 text-purple-200/70 font-mono text-sm">
-                        <div>
-                          Host: {formatSessionTime(hostTime)}
-                          {lobbyData?.hostStatus === 'extracted' && ' (extracted)'}
-                        </div>
-                        <div>
-                          Joiner: {formatSessionTime(joinerTime)}
-                          {lobbyData?.joinerStatus === 'extracted' && ' (extracted)'}
-                        </div>
+                    ) : (
+                      <div className="text-purple-300 font-mono animate-pulse">
+                        Waiting for opponent...
                       </div>
-                      <div className="flex flex-col gap-3">
-                        <Link
-                          href="/duels"
-                          className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg text-center hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg"
-                        >
-                          Back to Duels
-                        </Link>
-                        <Link href="/" className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white">
-                          Homepage
-                        </Link>
-                      </div>
-                    </>
-                  );
-                })()}
+                    )}
+                  </div>
+                  <div className="text-center mb-8">
+                    <div className="text-purple-200/70 font-mono text-sm">
+                      Your time: {formatSessionTime(Math.max(getElapsedSeconds(gameState), displayElapsedFallback))}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    {iWon && !settleSignature && !isSettling && (
+                      <button
+                        onClick={() => void duelClaimPot()}
+                        className="w-full px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
+                      >
+                        Claim Pot
+                      </button>
+                    )}
+                    <Link
+                      href="/duels"
+                      className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg text-center hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg"
+                    >
+                      Back to Duels
+                    </Link>
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {isGameOver && !isDuelMode && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">

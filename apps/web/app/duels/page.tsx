@@ -14,6 +14,23 @@ import {
 import { db } from '@/lib/firebase';
 
 const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+function parseSolToLamports(input: string): bigint | null {
+  const value = input.trim();
+  if (!/^\d+(\.\d{1,9})?$/.test(value)) return null;
+  const [wholePart, fracPart = ''] = value.split('.');
+  const whole = BigInt(wholePart);
+  const frac = BigInt(fracPart.padEnd(9, '0'));
+  return whole * LAMPORTS_PER_SOL + frac;
+}
+
+function formatLamportsToSol(lamports: bigint): string {
+  const sol = Number(lamports) / Number(LAMPORTS_PER_SOL);
+  if (sol >= 1) return sol.toFixed(3);
+  if (sol >= 0.01) return sol.toFixed(4);
+  return sol.toFixed(6);
+}
 
 function generateLobbyCode(): string {
   let code = '';
@@ -75,8 +92,12 @@ export default function DuelsPage() {
   const handleCreateLobby = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreateError(null);
-    const bet = createBet.trim();
-    if (!bet) return;
+    const betLamports = parseSolToLamports(createBet);
+    if (!betLamports || betLamports <= 0n) {
+      setCreateError('Enter a valid SOL amount (up to 9 decimals).');
+      return;
+    }
+    const bet = betLamports.toString();
 
     setLobbyState({ type: 'creating' });
     const code = generateLobbyCode();
@@ -86,6 +107,14 @@ export default function DuelsPage() {
         bet,
         hostWallet: null,
         joinerWallet: null,
+        hostReady: false,
+        joinerReady: false,
+        hostStatus: null,
+        joinerStatus: null,
+        hostSurvivalTime: null,
+        joinerSurvivalTime: null,
+        terrainSeed: null,
+        winner: null,
         status: 'waiting',
         createdAt: serverTimestamp(),
       });
@@ -121,14 +150,18 @@ export default function DuelsPage() {
         return;
       }
       const data = snap.data();
-      if (data.joinerWallet || data.status !== 'waiting') {
-        setJoinError('Lobby is already full or in progress.');
+      if (data.joinerWallet) {
+        setJoinError('Lobby is already full.');
+        setLobbyState({ type: 'idle' });
+        return;
+      }
+      if (data.status !== 'waiting') {
+        setJoinError('Lobby is already in progress.');
         setLobbyState({ type: 'idle' });
         return;
       }
       await updateDoc(lobbyRef, {
         joinerWallet: 'joined',
-        status: 'ready',
       });
       // Optimistically show lobby — don't wait for onSnapshot
       setLobbyState({
@@ -263,13 +296,13 @@ export default function DuelsPage() {
                 <h2 className="text-xl font-bold text-white mb-2 font-mono">Create a duel lobby</h2>
                 <p className="text-purple-300 text-sm mb-6">Set your bet and share the code with your opponent.</p>
                 <label className="block mb-4">
-                  <span className="text-purple-200 text-sm font-mono mb-2 block">Bet amount (base units)</span>
+                  <span className="text-purple-200 text-sm font-mono mb-2 block">Bet amount (SOL)</span>
                   <input
                     type="text"
                     autoComplete="off"
                     value={createBet}
                     onChange={(e) => setCreateBet(e.target.value)}
-                    placeholder="e.g. 5000000"
+                    placeholder="e.g. 0.005"
                     className="w-full px-4 py-3 bg-black/50 border border-purple-500/50 rounded-lg text-white font-mono placeholder:text-purple-400/50 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent"
                   />
                 </label>
@@ -364,7 +397,9 @@ export default function DuelsPage() {
               <div className="space-y-2 mb-8 text-left bg-black/30 rounded-xl p-4 border border-purple-500/20">
                 <div className="flex justify-between text-sm font-mono">
                   <span className="text-purple-400">Bet</span>
-                  <span className="text-white">{lobbyState.bet} base units</span>
+                  <span className="text-white">
+                    {formatLamportsToSol(BigInt(lobbyState.bet))} SOL
+                  </span>
                 </div>
                 <div className="flex justify-between text-sm font-mono">
                   <span className="text-purple-400">Players</span>
@@ -378,14 +413,12 @@ export default function DuelsPage() {
 
               {/* Actions */}
               <div className="flex flex-col gap-3">
-                {lobbyState.playerCount === 2 && (
-                  <Link
-                    href={`/game?duel=${lobbyState.code}&role=${lobbyState.role}`}
-                    className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg font-mono hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
-                  >
-                    Start Duel
-                  </Link>
-                )}
+                <Link
+                  href={`/game?duel=${lobbyState.code}&role=${lobbyState.role}`}
+                  className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg font-mono hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
+                >
+                  {lobbyState.playerCount === 2 ? 'Enter Arena' : 'Enter Arena (waiting for opponent)'}
+                </Link>
                 <button
                   type="button"
                   onClick={() => { void handleLeaveLobby(); }}

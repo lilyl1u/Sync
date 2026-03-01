@@ -72,6 +72,35 @@ pub mod gambling {
         Ok(())
     }
 
+    /// Player pays a custom buy-in amount (lamports) and starts a live session.
+    /// Used by duels where room bet can vary per match.
+    pub fn start_session_with_amount(ctx: Context<StartSession>, amount: u64) -> Result<()> {
+        require!(amount > 0, GamblingError::InvalidAmount);
+
+        let transfer_ctx = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.player.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+            },
+        );
+        anchor_lang::system_program::transfer(transfer_ctx, amount)?;
+
+        let now = Clock::get()?.unix_timestamp;
+        let session = &mut ctx.accounts.session;
+        session.player = ctx.accounts.player.key();
+        session.pool = ctx.accounts.pool.key();
+        session.started_at = now;
+        session.last_claimed_at = now;
+        session.buy_in_paid = amount;
+        session.bump = ctx.bumps.session;
+
+        let pool = &mut ctx.accounts.pool;
+        pool.total_sessions_started = pool.total_sessions_started.saturating_add(1);
+        pool.total_buy_ins_collected = pool.total_buy_ins_collected.saturating_add(amount);
+        Ok(())
+    }
+
     /// Player extracts while alive. Client sends the exact amount (lamports) to pull from the vault.
     /// Program validates: 0 < amount <= max_payout (buy_in + max_elapsed * rate).
     pub fn extract(ctx: Context<Extract>, amount: u64) -> Result<()> {

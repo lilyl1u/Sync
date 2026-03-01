@@ -7,7 +7,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  type TransactionInstruction,
+  TransactionInstruction,
   type TransactionSignature,
 } from '@solana/web3.js';
 import { gamblingIdl } from './gamblingIdl';
@@ -43,6 +43,8 @@ type GamblingProgramClient = {
   };
   provider: AnchorProvider;
 };
+
+const START_SESSION_WITH_AMOUNT_DISCRIMINATOR = Buffer.from([34, 197, 48, 213, 162, 184, 188, 204]);
 
 function toAnchorWallet(wallet: AnchorWalletLike): { publicKey: PublicKey; signTransaction: (tx: Transaction) => Promise<Transaction>; signAllTransactions: (txs: Transaction[]) => Promise<Transaction[]>; signMessage: (msg: Uint8Array) => Promise<Uint8Array> } {
   if (!wallet.publicKey) {
@@ -134,6 +136,15 @@ export type PoolConfig = {
   buyInBaseUnits: bigint;
   payoutRateBaseUnitsPerSecond: bigint;
 };
+
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+function solToLamports(solAmount: number): bigint {
+  if (!Number.isFinite(solAmount) || solAmount <= 0) {
+    throw new Error('SOL amount must be a positive number');
+  }
+  return BigInt(Math.round(solAmount * Number(LAMPORTS_PER_SOL)));
+}
 
 export async function fetchPoolConfig(connection: Connection): Promise<PoolConfig> {
   const { poolAuthorityPubkey } = assertSolanaClientConfig();
@@ -244,6 +255,69 @@ export async function startSessionOnChain({
     .rpc();
 }
 
+export async function startSessionWithAmountOnChain({
+  connection,
+  wallet,
+  amountBaseUnits,
+}: {
+  connection: Connection;
+  wallet: AnchorWalletLike;
+  amountBaseUnits: bigint;
+}): Promise<TransactionSignature> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+  if (amountBaseUnits <= 0n) {
+    throw new Error('Invalid duel bet amount');
+  }
+
+  const program = getProgram(connection, wallet);
+  const { pool, vault, session } = getRunAccounts(wallet.publicKey);
+  const [poolInfo, vaultInfo] = await Promise.all([
+    connection.getAccountInfo(pool),
+    connection.getAccountInfo(vault),
+  ]);
+  if (!poolInfo) {
+    const { poolAuthorityPubkey } = assertSolanaClientConfig();
+    throw new Error(
+      `Pool not initialized for authority ${poolAuthorityPubkey.toBase58()} (expected PDA ${pool.toBase58()}).`,
+    );
+  }
+  if (!vaultInfo) {
+    throw new Error(`Vault PDA ${vault.toBase58()} not found.`);
+  }
+
+  const data = Buffer.alloc(16);
+  START_SESSION_WITH_AMOUNT_DISCRIMINATOR.copy(data, 0);
+  data.writeBigUInt64LE(amountBaseUnits, 8);
+
+  const startWithAmountIx = new TransactionInstruction({
+    programId: GAMBLING_PROGRAM_ID,
+    keys: [
+      { pubkey: pool, isSigner: false, isWritable: true },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: session, isSigner: false, isWritable: true },
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+
+  // If a prior duel session exists, close it first and start in one tx (single wallet popup).
+  const existingSession = await connection.getAccountInfo(session);
+  if (existingSession) {
+    const recordDeathIx = await program.methods
+      .recordDeath()
+      .accounts({ pool, vault, session, player: wallet.publicKey })
+      .instruction();
+    const tx = new Transaction().add(recordDeathIx, startWithAmountIx);
+    return program.provider.sendAndConfirm(tx);
+  }
+
+  const tx = new Transaction().add(startWithAmountIx);
+  return program.provider.sendAndConfirm(tx);
+}
+
 export async function extractOnChain({
   connection,
   wallet,
@@ -295,6 +369,47 @@ export async function recordDeathOnChain({
       player: wallet.publicKey,
     })
     .rpc();
+}
+
+/**
+ * Utility transfer for charging an exact amount in SOL to any target account.
+ * Returns a single wallet-confirmed signature.
+ */
+export async function chargeSolToAccount({
+  connection,
+  wallet,
+  destination,
+  amountSol,
+}: {
+  connection: Connection;
+  wallet: AnchorWalletLike;
+  destination: PublicKey;
+  amountSol: number;
+}): Promise<TransactionSignature> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const lamports = solToLamports(amountSol);
+  if (lamports <= 0n) {
+    throw new Error('Transfer amount must be greater than 0');
+  }
+
+  const tx = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: destination,
+      lamports: Number(lamports),
+    }),
+  );
+
+  const signed = await wallet.signTransaction(tx);
+  const signature = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  });
+  await connection.confirmTransaction(signature, 'confirmed');
+  return signature;
 }
 
 /** Earned this run only (starts at 0, increases by rate per second). Used for in-game display. */
