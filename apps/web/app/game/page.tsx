@@ -1,6 +1,12 @@
 import { GeometryDashGame } from './components/GeometryDashGame';
 
-export default function GamePage() {
+export default async function GamePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ duel?: string; role?: string }>;
+}) {
+  const params = await searchParams;
+  const role = params.role === 'host' || params.role === 'joiner' ? params.role : undefined;
   return (
     <main className="min-h-screen bg-gradient-to-b from-purple-950 via-purple-900 to-black flex flex-col items-center justify-center p-8">
       {/* Title */}
@@ -15,10 +21,13 @@ export default function GamePage() {
 
       {/* Game Container */}
       <div className="w-full max-w-7xl">
-        <GeometryDashGame width={1200} height={600} />
+        <GeometryDashGame
+          width={1200}
+          height={600}
+          duelCode={params.duel}
+          role={role}
+        />
       </div>
-
-
     </main>
   );
 }

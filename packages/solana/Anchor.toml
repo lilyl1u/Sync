@@ -6,13 +6,13 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-gambling = "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg"
+gambling = "FAdRVYXxpjaacwU1MNcNf9yayhkCNJdyRyoJNcMKbrnB"
 
 [programs.localnet]
 gambling = "FAdRVYXxpjaacwU1MNcNf9yayhkCNJdyRyoJNcMKbrnB"
 
 [programs.mainnet]
-gambling = "8FgvLWN1vADqi4YnkwvzLp3sESgUtpSWL1EKoHqSQGsg"
+gambling = "FAdRVYXxpjaacwU1MNcNf9yayhkCNJdyRyoJNcMKbrnB"
 
 [registry]
 url = "https://api.apr.dev"

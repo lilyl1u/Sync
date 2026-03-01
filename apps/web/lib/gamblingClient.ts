@@ -7,7 +7,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  type TransactionInstruction,
+  TransactionInstruction,
   type TransactionSignature,
 } from '@solana/web3.js';
 import { gamblingIdl } from './gamblingIdl';
@@ -38,8 +38,10 @@ type RpcCallBuilder = {
 type GamblingProgramClient = {
   methods: {
     startSession: () => InstructionBuilder;
+    startSessionWithAmount: (amount: BN, payoutRate: BN) => InstructionBuilder;
     extract: (amount: BN) => RpcCallBuilder;
     recordDeath: () => InstructionBuilder;
+    closeLegacySession: () => InstructionBuilder;
   };
   provider: AnchorProvider;
 };
@@ -118,22 +120,34 @@ function decodePool(data: Buffer): { buyInBaseUnits: bigint; payoutRateBaseUnits
   return { buyInBaseUnits: buyIn, payoutRateBaseUnitsPerSecond: payoutRate };
 }
 
-/** Session account layout: 8-byte discriminator, player(32), pool(32), started_at(8), last_claimed_at(8), buy_in_paid(8), bump(1) */
+/** Session layout: disc(8), player(32), pool(32), started_at(8), last_claimed_at(8), buy_in_paid(8), payout_rate(8), bump(1) */
 function decodeSession(data: Buffer): {
   startedAt: number;
   lastClaimedAt: number;
   buyInPaid: bigint;
+  payoutRate: bigint;
 } {
-  const startedAt = Number(data.readBigInt64LE(8 + 32 + 32));
-  const lastClaimedAt = Number(data.readBigInt64LE(8 + 32 + 32 + 8));
-  const buyInPaid = data.readBigUInt64LE(8 + 32 + 32 + 8 + 8);
-  return { startedAt, lastClaimedAt, buyInPaid };
+  const base = 8 + 32 + 32;
+  const startedAt = Number(data.readBigInt64LE(base));
+  const lastClaimedAt = Number(data.readBigInt64LE(base + 8));
+  const buyInPaid = data.readBigUInt64LE(base + 16);
+  const payoutRate = data.readBigUInt64LE(base + 24);
+  return { startedAt, lastClaimedAt, buyInPaid, payoutRate };
 }
 
 export type PoolConfig = {
   buyInBaseUnits: bigint;
   payoutRateBaseUnitsPerSecond: bigint;
 };
+
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+function solToLamports(solAmount: number): bigint {
+  if (!Number.isFinite(solAmount) || solAmount <= 0) {
+    throw new Error('SOL amount must be a positive number');
+  }
+  return BigInt(Math.round(solAmount * Number(LAMPORTS_PER_SOL)));
+}
 
 export async function fetchPoolConfig(connection: Connection): Promise<PoolConfig> {
   const { poolAuthorityPubkey } = assertSolanaClientConfig();
@@ -147,7 +161,7 @@ export async function fetchPoolConfig(connection: Connection): Promise<PoolConfi
 
 /**
  * Compute the exact duration and payout the program will use for extract.
- * Fetches session + pool from chain and current block time so UI and Phantom match.
+ * Uses the session's per-session payout rate (falls back to pool rate for legacy sessions).
  */
 export async function getExtractParams(
   connection: Connection,
@@ -163,7 +177,10 @@ export async function getExtractParams(
   if (!sessionInfo?.data) throw new Error('No active session');
 
   const poolConfig = decodePool(Buffer.from(poolInfo.data));
-  const { lastClaimedAt, buyInPaid } = decodeSession(Buffer.from(sessionInfo.data));
+  const sessionData = decodeSession(Buffer.from(sessionInfo.data));
+  const rate = sessionData.payoutRate > 0n
+    ? sessionData.payoutRate
+    : poolConfig.payoutRateBaseUnitsPerSecond;
 
   let blockTime: number | null = null;
   const slot = await connection.getSlot('confirmed');
@@ -173,13 +190,13 @@ export async function getExtractParams(
   }
   if (blockTime == null) throw new Error('Could not get block time');
 
-  const maxElapsed = Math.max(0, blockTime - lastClaimedAt);
+  const maxElapsed = Math.max(0, blockTime - sessionData.lastClaimedAt);
   const durationSeconds = Math.min(
     Math.max(0, Math.floor(clientDurationSeconds)),
     maxElapsed,
   );
-  const winnings = poolConfig.payoutRateBaseUnitsPerSecond * BigInt(durationSeconds);
-  const payoutBaseUnits = buyInPaid + winnings;
+  const winnings = rate * BigInt(durationSeconds);
+  const payoutBaseUnits = sessionData.buyInPaid + winnings;
 
   return { durationSeconds, payoutBaseUnits };
 }
@@ -225,22 +242,99 @@ export async function startSessionOnChain({
     systemProgram: SystemProgram.programId,
   };
 
+  const NEW_SESSION_SIZE = 8 + 32 + 32 + 8 + 8 + 8 + 8 + 1;
+
   if (existingSession) {
-    const recordDeathIx = await program.methods
-      .recordDeath()
-      .accounts(recordDeathAccounts)
-      .instruction();
+    const isLegacy = existingSession.data.length !== NEW_SESSION_SIZE;
+    const closeIx = isLegacy
+      ? await program.methods
+          .closeLegacySession()
+          .accounts(recordDeathAccounts)
+          .instruction()
+      : await program.methods
+          .recordDeath()
+          .accounts(recordDeathAccounts)
+          .instruction();
     const startSessionIx = await program.methods
       .startSession()
       .accounts(startSessionAccounts)
       .instruction();
-    const tx = new Transaction().add(recordDeathIx, startSessionIx);
+    const tx = new Transaction().add(closeIx, startSessionIx);
     return program.provider.sendAndConfirm(tx);
   }
 
   return program.methods
     .startSession()
     .accounts(startSessionAccounts)
+    .rpc();
+}
+
+export async function startSessionWithAmountOnChain({
+  connection,
+  wallet,
+  amountBaseUnits,
+  payoutRateBaseUnits,
+}: {
+  connection: Connection;
+  wallet: AnchorWalletLike;
+  amountBaseUnits: bigint;
+  payoutRateBaseUnits: bigint;
+}): Promise<TransactionSignature> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+  if (amountBaseUnits <= 0n) {
+    throw new Error('Invalid bet amount');
+  }
+  if (payoutRateBaseUnits <= 0n) {
+    throw new Error('Invalid payout rate');
+  }
+
+  const program = getProgram(connection, wallet);
+  const { pool, vault, session } = getRunAccounts(wallet.publicKey);
+  const [poolInfo, vaultInfo] = await Promise.all([
+    connection.getAccountInfo(pool),
+    connection.getAccountInfo(vault),
+  ]);
+  if (!poolInfo) {
+    const { poolAuthorityPubkey } = assertSolanaClientConfig();
+    throw new Error(
+      `Pool not initialized for authority ${poolAuthorityPubkey.toBase58()} (expected PDA ${pool.toBase58()}).`,
+    );
+  }
+  if (!vaultInfo) {
+    throw new Error(`Vault PDA ${vault.toBase58()} not found.`);
+  }
+
+  const amountBN = new BN(amountBaseUnits.toString());
+  const rateBN = new BN(payoutRateBaseUnits.toString());
+  const startAccounts = { pool, vault, session, player: wallet.publicKey, systemProgram: SystemProgram.programId };
+
+  const NEW_SESSION_SIZE = 8 + 32 + 32 + 8 + 8 + 8 + 8 + 1; // disc + player + pool + started_at + last_claimed_at + buy_in_paid + payout_rate + bump
+
+  const existingSession = await connection.getAccountInfo(session);
+  if (existingSession) {
+    const isLegacy = existingSession.data.length !== NEW_SESSION_SIZE;
+    const closeIx = isLegacy
+      ? await program.methods
+          .closeLegacySession()
+          .accounts({ pool, vault, session, player: wallet.publicKey })
+          .instruction()
+      : await program.methods
+          .recordDeath()
+          .accounts({ pool, vault, session, player: wallet.publicKey })
+          .instruction();
+    const startIx = await program.methods
+      .startSessionWithAmount(amountBN, rateBN)
+      .accounts(startAccounts)
+      .instruction();
+    const tx = new Transaction().add(closeIx, startIx);
+    return program.provider.sendAndConfirm(tx);
+  }
+
+  return program.methods
+    .startSessionWithAmount(amountBN, rateBN)
+    .accounts(startAccounts)
     .rpc();
 }
 
@@ -295,6 +389,47 @@ export async function recordDeathOnChain({
       player: wallet.publicKey,
     })
     .rpc();
+}
+
+/**
+ * Utility transfer for charging an exact amount in SOL to any target account.
+ * Returns a single wallet-confirmed signature.
+ */
+export async function chargeSolToAccount({
+  connection,
+  wallet,
+  destination,
+  amountSol,
+}: {
+  connection: Connection;
+  wallet: AnchorWalletLike;
+  destination: PublicKey;
+  amountSol: number;
+}): Promise<TransactionSignature> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const lamports = solToLamports(amountSol);
+  if (lamports <= 0n) {
+    throw new Error('Transfer amount must be greater than 0');
+  }
+
+  const tx = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: destination,
+      lamports: Number(lamports),
+    }),
+  );
+
+  const signed = await wallet.signTransaction(tx);
+  const signature = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  });
+  await connection.confirmTransaction(signature, 'confirmed');
+  return signature;
 }
 
 /** Earned this run only (starts at 0, increases by rate per second). Used for in-game display. */

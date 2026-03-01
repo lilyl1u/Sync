@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { doc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { useModalStatus, usePrivy, useWallets, useSolanaWallets } from '@privy-io/react-auth';
 import type { ConnectedSolanaWallet } from '@privy-io/react-auth';
 import {
@@ -15,16 +16,34 @@ import { Connection, PublicKey, type Transaction } from '@solana/web3.js';
 import {
   estimateEarnedBaseUnits,
   extractOnChain,
-  fetchPoolConfig,
+  getExtractParams,
   recordDeathOnChain,
   startSessionOnChain,
+  startSessionWithAmountOnChain,
   type PoolConfig,
 } from '@/lib/gamblingClient';
 import { RPC_URL } from '@/lib/solana';
 import { requestAndWaitFulfilled } from '@/lib/oraoVrf';
+import { db } from '@/lib/firebase';
 
 import { detectBeats, DetectedBeat } from '../utils/beatDetector';
 import { playMidi, stopMidi, pauseMidi as pauseMidiPlayback, resumeMidi as resumeMidiPlayback } from '../utils/midiPlayer';
+
+type DuelLobbyData = {
+  status?: string;
+  terrainSeed?: number;
+  startedAt?: { seconds: number };
+  hostSurvivalTime?: number | null;
+  joinerSurvivalTime?: number | null;
+  hostStatus?: 'playing' | 'died' | 'extracted';
+  joinerStatus?: 'playing' | 'died' | 'extracted';
+  winner?: 'host' | 'joiner' | null;
+  bet?: string;
+  hostReady?: boolean;
+  joinerReady?: boolean;
+  hostWallet?: string | null;
+  joinerWallet?: string | null;
+};
 
 const PLAYER_SPEED = 300;
 const AUDIO_URL = '/song/song.mp3';
@@ -33,6 +52,8 @@ const LOFI_API = '/api/generate-lofi';
 interface GeometryDashGameProps {
   width?: number;
   height?: number;
+  duelCode?: string;
+  role?: 'host' | 'joiner';
 }
 
 type PhantomProvider = {
@@ -140,7 +161,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMes
   }
 }
 
-export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGameProps) {
+export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }: GeometryDashGameProps) {
+  const isDuelMode = Boolean(duelCode && role);
   const {
     ready: isPrivyReady,
     authenticated: isPrivyAuthenticated,
@@ -198,10 +220,22 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   const [displayElapsedFallback, setDisplayElapsedFallback] = useState(0);
   const [poolConfig, setPoolConfig] = useState<PoolConfig | null>(null);
   const [frozenEarned, setFrozenEarned] = useState<bigint | null>(null);
+  const [duelClaimAmount, setDuelClaimAmount] = useState<bigint | null>(null);
+  const [soloBetInput, setSoloBetInput] = useState('0.005');
+  const [soloBetLamports, setSoloBetLamports] = useState<bigint | null>(null);
   const [terrainSeed, setTerrainSeed] = useState<number | null>(null);
   const [vrfRequestTx, setVrfRequestTx] = useState<string | null>(null);
   const [isRequestingVrf, setIsRequestingVrf] = useState(false);
   const sessionStartRef = useRef<number | null>(null);
+
+  // Duel mode: lobby state from Firestore
+  const [lobbyData, setLobbyData] = useState<DuelLobbyData | null>(null);
+  const [duelCountdown, setDuelCountdown] = useState<number | null>(null);
+  const duelLobbyUnsubRef = useRef<(() => void) | null>(null);
+  const opponentDiedHandledRef = useRef(false);
+  const countdownTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const countdownInitiatedRef = useRef(false);
+  const duelReadyInFlightRef = useRef(false);
 
   useEffect(() => {
     solanaWalletsRef.current = solanaWallets;
@@ -209,6 +243,32 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
   useEffect(() => {
     isPrivyAuthenticatedRef.current = isPrivyAuthenticated;
   }, [isPrivyAuthenticated]);
+
+  // ------------------------------------------------------------------
+  // Duel mode: subscribe to lobby
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!duelCode || !role) {
+      setLobbyData(null);
+      return;
+    }
+    duelLobbyUnsubRef.current?.();
+    const unsub = onSnapshot(doc(db, 'lobbies', duelCode), (snap) => {
+      if (!snap.exists()) {
+        setLobbyData(null);
+        return;
+      }
+      setLobbyData(snap.data() as DuelLobbyData);
+    }, (err) => {
+      console.error('Duel lobby listener error:', err);
+      setLobbyData(null);
+    });
+    duelLobbyUnsubRef.current = unsub;
+    return () => {
+      duelLobbyUnsubRef.current?.();
+      duelLobbyUnsubRef.current = null;
+    };
+  }, [duelCode, role]);
 
   // ------------------------------------------------------------------
   // Load & analyse audio on mount (level/engine created on Pay & Start after VRF)
@@ -535,6 +595,71 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     [walletAddress, walletProviderName],
   );
 
+  const duelClaimPot = useCallback(async () => {
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey || hasSettledCurrentRunRef.current) return;
+    hasSettledCurrentRunRef.current = true;
+    setIsSettling(true);
+    setErrorMessage(null);
+    setStatusMessage(`Claiming pot – confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`);
+    try {
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const betAmount = BigInt(lobbyData?.bet ?? '0');
+      const potAmount = betAmount * 2n;
+      const params = await getExtractParams(connectionRef.current, provider.publicKey, 9999);
+      const payoutBaseUnits = params.payoutBaseUnits < potAmount ? params.payoutBaseUnits : potAmount;
+      if (payoutBaseUnits <= 0n) {
+        throw new Error('Claimable amount is zero');
+      }
+      setDuelClaimAmount(payoutBaseUnits);
+      const signature = await extractOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+        payoutBaseUnits,
+      });
+      setSettleSignature(signature);
+      setStatusMessage(`Claimed ${formatSol(payoutBaseUnits)} SOL`);
+    } catch (err) {
+      hasSettledCurrentRunRef.current = false;
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to claim pot');
+      setStatusMessage(null);
+    } finally {
+      setIsSettling(false);
+    }
+  }, [walletProviderName, lobbyData?.bet]);
+
+  const duelRefund = useCallback(async () => {
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey || hasSettledCurrentRunRef.current) return;
+    hasSettledCurrentRunRef.current = true;
+    setIsSettling(true);
+    setErrorMessage(null);
+    setStatusMessage(`Refunding bet – confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`);
+    try {
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const betAmount = BigInt(lobbyData?.bet ?? '0');
+      const params = await getExtractParams(connectionRef.current, provider.publicKey, 9999);
+      const refundAmount = params.payoutBaseUnits < betAmount ? params.payoutBaseUnits : betAmount;
+      if (refundAmount <= 0n) {
+        throw new Error('Refund amount is zero');
+      }
+      setDuelClaimAmount(refundAmount);
+      const signature = await extractOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+        payoutBaseUnits: refundAmount,
+      });
+      setSettleSignature(signature);
+      setStatusMessage(`Refunded ${formatSol(refundAmount)} SOL`);
+    } catch (err) {
+      hasSettledCurrentRunRef.current = false;
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to refund');
+      setStatusMessage(null);
+    } finally {
+      setIsSettling(false);
+    }
+  }, [walletProviderName, lobbyData?.bet]);
+
   const handleConnectWallet = useCallback(async (target: 'phantom' | 'privy') => {
     if (target === 'privy') {
       setAutoStartAfterPrivyConnect(true);
@@ -546,6 +671,111 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       setErrorMessage(error instanceof Error ? error.message : 'Connection failed');
     }
   }, [connectWallet]);
+
+  const writeDuelSurvival = useCallback(
+    async (survivalTimeSeconds: number, status: 'died' | 'extracted') => {
+      if (!duelCode || !role) return;
+      const lobbyRef = doc(db, 'lobbies', duelCode);
+      const timeField = role === 'host' ? 'hostSurvivalTime' : 'joinerSurvivalTime';
+      const statusField = role === 'host' ? 'hostStatus' : 'joinerStatus';
+      try {
+        await updateDoc(lobbyRef, { [timeField]: survivalTimeSeconds, [statusField]: status });
+      } catch (err) {
+        console.error('Failed to write duel survival:', err);
+      }
+    },
+    [duelCode, role],
+  );
+
+  // ------------------------------------------------------------------
+  // Duel: press "I'm Ready"
+  // ------------------------------------------------------------------
+  const handleDuelReady = useCallback(async () => {
+    if (!duelCode || !role || !walletAddress) return;
+    if (duelReadyInFlightRef.current) return;
+    const myReady = role === 'host' ? lobbyData?.hostReady : lobbyData?.joinerReady;
+    if (myReady) return;
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey) {
+      setErrorMessage('Wallet not connected.');
+      return;
+    }
+    setErrorMessage(null);
+    duelReadyInFlightRef.current = true;
+    setIsPayingBuyIn(true);
+    setStatusMessage('Confirm your bet in wallet...');
+    try {
+      if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+      const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
+      if (betBaseUnits <= 0n) {
+        throw new Error('Invalid duel bet amount.');
+      }
+      const duelRate = betBaseUnits / 15n || 1n;
+      const signature = await startSessionWithAmountOnChain({
+        connection: connectionRef.current,
+        wallet: provider,
+        amountBaseUnits: betBaseUnits,
+        payoutRateBaseUnits: duelRate,
+      });
+      setBuyInSignature(signature);
+      setStatusMessage('Confirming on chain...');
+      await connectionRef.current.confirmTransaction(signature, 'confirmed');
+      setPoolConfig({
+        buyInBaseUnits: betBaseUnits,
+        payoutRateBaseUnitsPerSecond: duelRate,
+      });
+
+      const lobbyRef = doc(db, 'lobbies', duelCode);
+      const readyField = role === 'host' ? 'hostReady' : 'joinerReady';
+      const walletField = role === 'host' ? 'hostWallet' : 'joinerWallet';
+      await updateDoc(lobbyRef, { [readyField]: true, [walletField]: walletAddress });
+      setStatusMessage('Bet paid! Waiting for opponent...');
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to pay bet');
+      setStatusMessage(null);
+    } finally {
+      duelReadyInFlightRef.current = false;
+      setIsPayingBuyIn(false);
+    }
+  }, [duelCode, role, walletAddress, lobbyData?.hostReady, lobbyData?.joinerReady, lobbyData?.bet]);
+
+  // ------------------------------------------------------------------
+  // Duel: when both ready, host triggers VRF → countdown
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!isDuelMode || role !== 'host' || !lobbyData) return;
+    if (!lobbyData.hostReady || !lobbyData.joinerReady) return;
+    if (lobbyData.status === 'countdown' || lobbyData.status === 'playing' || lobbyData.status === 'finished') return;
+
+    const provider = activeWalletRef.current;
+    if (!provider?.publicKey) return;
+
+    let cancelled = false;
+    (async () => {
+      setIsRequestingVrf(true);
+      setStatusMessage('Both ready! Generating terrain...');
+      try {
+        if (!connectionRef.current) connectionRef.current = new Connection(RPC_URL, 'confirmed');
+        const vrfResult = await requestAndWaitFulfilled(connectionRef.current, provider);
+        if (cancelled) return;
+        setTerrainSeed(vrfResult.seed);
+        setVrfRequestTx(vrfResult.requestTx);
+        const lobbyRef = doc(db, 'lobbies', duelCode!);
+        await updateDoc(lobbyRef, {
+          terrainSeed: vrfResult.seed,
+          status: 'countdown',
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMessage(err instanceof Error ? err.message : 'VRF failed');
+          setStatusMessage(null);
+        }
+      } finally {
+        if (!cancelled) setIsRequestingVrf(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isDuelMode, role, lobbyData?.hostReady, lobbyData?.joinerReady, lobbyData?.status, duelCode]);
 
   const buildLevelAndEngine = useCallback(
     (seed: number) => {
@@ -575,16 +805,117 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       engine.onGameOver(() => {
         setIsGameOver(true);
         stopAudio();
+        if (duelCode && role) {
+          const elapsed = getElapsedSeconds(engine.getState());
+          void writeDuelSurvival(elapsed, 'died');
+          const wallet = activeWalletRef.current;
+          if (wallet?.publicKey && connectionRef.current) {
+            void recordDeathOnChain({ connection: connectionRef.current, wallet });
+          }
+        }
       });
 
       renderer.render(engine.getState());
       return engine;
     },
-    [audioError, width, height, stopAudio],
+    [audioError, width, height, stopAudio, duelCode, role, writeDuelSurvival],
   );
+
+  // ------------------------------------------------------------------
+  // Duel: countdown 3-2-1 then start (timers stored in ref to survive status changes)
+  // ------------------------------------------------------------------
+  const startDuelEngine = useCallback((seed: number) => {
+    const newEngine = buildLevelAndEngine(seed);
+    if (!newEngine) return;
+    engineRef.current = newEngine;
+    opponentDiedHandledRef.current = false;
+    setSettleSignature(null);
+    setDuelClaimAmount(null);
+    setFrozenEarned(null);
+    frozenEarnedRef.current = null;
+    hasSettledCurrentRunRef.current = false;
+    setDisplayElapsedFallback(0);
+    setStatusMessage(null);
+    newEngine.start();
+    setHasStarted(true);
+    setIsGameOver(false);
+    setHasExtracted(false);
+    gameContainerRef.current?.focus();
+    if (audioLoaded) playAudio();
+    if (role === 'host' && duelCode) {
+      void updateDoc(doc(db, 'lobbies', duelCode), {
+        status: 'playing',
+        startedAt: serverTimestamp(),
+        hostStatus: 'playing',
+        joinerStatus: 'playing',
+      });
+    }
+  }, [buildLevelAndEngine, audioLoaded, playAudio, role, duelCode]);
+
+  useEffect(() => {
+    if (!isDuelMode || !lobbyData || hasStarted) return;
+    if (countdownInitiatedRef.current) return;
+
+    const seed = lobbyData.terrainSeed;
+    if (typeof seed !== 'number') return;
+
+    if (lobbyData.status === 'countdown') {
+      countdownInitiatedRef.current = true;
+      setTerrainSeed(seed);
+      setDuelCountdown(3);
+      countdownTimersRef.current = [
+        setTimeout(() => setDuelCountdown(2), 1000),
+        setTimeout(() => setDuelCountdown(1), 2000),
+        setTimeout(() => { setDuelCountdown(0); startDuelEngine(seed); }, 3000),
+        setTimeout(() => setDuelCountdown(null), 3600),
+      ];
+    } else if (lobbyData.status === 'playing') {
+      countdownInitiatedRef.current = true;
+      setTerrainSeed(seed);
+      startDuelEngine(seed);
+    }
+  }, [isDuelMode, lobbyData, hasStarted, startDuelEngine]);
+
+  useEffect(() => {
+    return () => {
+      countdownTimersRef.current.forEach(clearTimeout);
+      countdownTimersRef.current = [];
+    };
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Duel: detect opponent death → stop local game, show YOU WIN
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!isDuelMode || !hasStarted || !lobbyData) return;
+    if (opponentDiedHandledRef.current) return;
+    const myStatus = role === 'host' ? lobbyData.hostStatus : lobbyData.joinerStatus;
+    const opponentStatus = role === 'host' ? lobbyData.joinerStatus : lobbyData.hostStatus;
+
+    if (opponentStatus === 'died') {
+      opponentDiedHandledRef.current = true;
+      const engine = engineRef.current;
+      if (engine) engine.pause();
+      stopAudio();
+      const elapsed = getElapsedSeconds(engine?.getState() ?? null);
+      if (!isGameOver) setIsGameOver(true);
+
+      if (myStatus === 'died') {
+        const lobbyRef = doc(db, 'lobbies', duelCode!);
+        void updateDoc(lobbyRef, { winner: null, status: 'finished' });
+        void duelRefund();
+      } else {
+        void writeDuelSurvival(elapsed, 'extracted');
+        const lobbyRef = doc(db, 'lobbies', duelCode!);
+        void updateDoc(lobbyRef, { winner: role, status: 'finished' });
+        void duelClaimPot();
+      }
+    }
+  }, [isDuelMode, hasStarted, isGameOver, lobbyData, role, duelCode, stopAudio, writeDuelSurvival, duelClaimPot, duelRefund]);
 
   const handlePayAndStart = useCallback(async () => {
     if (hasStarted || !walletAddress) return;
+    if (isDuelMode) return;
     const provider = activeWalletRef.current;
     if (!provider?.publicKey) {
       setErrorMessage('Wallet disconnected. Please connect again.');
@@ -615,17 +946,30 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         setIsRequestingVrf(false);
       }
 
+      const betStr = soloBetInput.trim();
+      const betSol = parseFloat(betStr);
+      if (!betStr || !Number.isFinite(betSol) || betSol <= 0) {
+        throw new Error('Enter a valid SOL bet amount.');
+      }
+      const betLamports = BigInt(Math.round(betSol * 1e9));
+      const ratePerSec = betLamports / 15n || 1n;
+      setSoloBetLamports(betLamports);
+
       setStatusMessage('Submitting on-chain start transaction...');
-      const signature = await startSessionOnChain({
+      const signature = await startSessionWithAmountOnChain({
         connection: connectionRef.current,
         wallet: provider,
+        amountBaseUnits: betLamports,
+        payoutRateBaseUnits: ratePerSec,
       });
       setBuyInSignature(signature);
       setStatusMessage('Waiting for on-chain confirmation...');
       await connectionRef.current.confirmTransaction(signature, 'confirmed');
 
-      const config = await fetchPoolConfig(connectionRef.current);
-      setPoolConfig(config);
+      setPoolConfig({
+        buyInBaseUnits: betLamports,
+        payoutRateBaseUnitsPerSecond: ratePerSec,
+      });
 
       setSettleSignature(null);
       setFrozenEarned(null);
@@ -647,11 +991,12 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     } finally {
       setIsPayingBuyIn(false);
     }
-  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine]);
+  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine, isDuelMode, soloBetInput]);
 
   useEffect(() => {
     if (!autoStartAfterPrivyConnect) return;
     if (!walletAddress || hasStarted || loadingAudio || isWalletConnecting || isPayingBuyIn || isRequestingVrf) return;
+    if (isDuelMode) return;
 
     setAutoStartAfterPrivyConnect(false);
     setStatusMessage('Privy connected. Starting game...');
@@ -664,6 +1009,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     isWalletConnecting,
     isPayingBuyIn,
     isRequestingVrf,
+    isDuelMode,
     handlePayAndStart,
   ]);
 
@@ -674,8 +1020,19 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     if (!engine || !hasStarted || isGameOver || hasExtracted || isSettling) return;
 
     const secs = Math.max(getElapsedSeconds(engine.getState()), displayElapsedFallback);
-    const earned = estimateEarnedBaseUnits(secs, poolConfig ?? undefined);
 
+    if (isDuelMode && duelCode && role) {
+      // Duel mode: write survival time, no on-chain extract
+      frozenEarnedRef.current = null;
+      engine.pause();
+      stopAudio();
+      setFrozenEarned(null);
+      setHasExtracted(true);
+      await writeDuelSurvival(secs, 'extracted');
+      return;
+    }
+
+    const earned = estimateEarnedBaseUnits(secs, poolConfig ?? undefined);
     const totalPayout = earned + FEE_BUFFER_LAMPORTS;
     frozenEarnedRef.current = totalPayout;
     engine.pause();
@@ -690,7 +1047,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       engine.resume();
       if (audioLoaded) resumeAudio();
     }
-  }, [displayElapsedFallback, hasExtracted, hasStarted, isGameOver, isSettling, poolConfig, doExtract, stopAudio, audioLoaded, resumeAudio]);
+  }, [displayElapsedFallback, hasExtracted, hasStarted, isGameOver, isSettling, poolConfig, doExtract, stopAudio, audioLoaded, resumeAudio, isDuelMode, duelCode, role, writeDuelSurvival]);
 
   const cancelExtractHold = useCallback(() => {
     if (eHoldRafRef.current !== null) {
@@ -744,6 +1101,8 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     setBuyInSignature(null);
     setSettleSignature(null);
     setFrozenEarned(null);
+    setDuelClaimAmount(null);
+    setSoloBetLamports(null);
     setPoolConfig(null);
     setTerrainSeed(null);
     setVrfRequestTx(null);
@@ -751,6 +1110,10 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
     setErrorMessage(null);
     setDisplayElapsedFallback(0);
     hasSettledCurrentRunRef.current = false;
+    countdownInitiatedRef.current = false;
+    countdownTimersRef.current.forEach(clearTimeout);
+    countdownTimersRef.current = [];
+    setDuelCountdown(null);
     gameContainerRef.current?.focus();
   }, [cancelExtractHold, stopAudio]);
 
@@ -767,8 +1130,13 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       if (e.key === 'r' || e.key === 'R') { handleRestart(); return; }
       if (e.key === 'Enter' && !hasStarted && !loadingAudio) {
         e.preventDefault();
-        if (walletAddress) void handlePayAndStart();
-        else void handleConnectWallet('phantom');
+        if (isDuelMode) {
+          if (walletAddress) void handleDuelReady();
+          else void handleConnectWallet('phantom');
+        } else {
+          if (walletAddress) void handlePayAndStart();
+          else void handleConnectWallet('phantom');
+        }
       }
       if ((e.key === 'e' || e.key === 'E') && !e.repeat && !loadingAudio) {
         e.preventDefault();
@@ -785,7 +1153,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       window.removeEventListener('keydown', handleKeyPress);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [cancelExtractHold, handleConnectWallet, handlePayAndStart, handleRestart, hasExtracted, hasStarted, isGameOver, startExtractHold, walletAddress, loadingAudio]);
+  }, [cancelExtractHold, handleConnectWallet, handlePayAndStart, handleDuelReady, handleRestart, hasExtracted, hasStarted, isGameOver, startExtractHold, walletAddress, loadingAudio, isDuelMode, role]);
 
   // Compute the live earned value (only used while playing, NOT after extract)
   const liveEarned: bigint | null = (gameState && hasStarted && !isGameOver && !hasExtracted)
@@ -811,6 +1179,20 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
       className="relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none"
       aria-label="Game"
     >
+      {/* Duel countdown overlay */}
+      {duelCountdown !== null && duelCountdown > 0 && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="text-9xl font-bold text-white animate-ping" style={{ animationDuration: '0.8s' }}>
+            {duelCountdown}
+          </div>
+        </div>
+      )}
+      {duelCountdown === 0 && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
+          <div className="text-7xl font-bold text-emerald-400 animate-pulse">GO!</div>
+        </div>
+      )}
+
       <div className="relative" style={{ width, height }}>
         <canvas
           ref={canvasRef}
@@ -818,7 +1200,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
           height={height}
           className="border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
         />
-        {gameState && liveEarned !== null && (
+        {gameState && liveEarned !== null && !isDuelMode && (
           <div
             className="absolute pointer-events-none font-mono text-sm font-bold text-emerald-400 drop-shadow-lg"
             style={{
@@ -842,21 +1224,119 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-10">
           <div className="bg-black/50 backdrop-blur-sm rounded-2xl border-2 border-purple-500 p-12 text-center">
             <h2 className="text-3xl font-bold text-white mb-4 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              {loadingAudio ? 'Loading Audio...' : 'Ready to Play?'}
+              {loadingAudio
+                ? 'Loading Audio...'
+                : isDuelMode
+                  ? 'Duel Arena'
+                  : 'Ready to Play?'}
             </h2>
             <p className="text-purple-200 mb-3 max-w-md">
-              Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.
+              {isDuelMode
+                ? 'Both players must ready up. First to die loses the pot.'
+                : 'Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.'}
             </p>
             {walletBalanceLamports !== null && (
               <p className="text-emerald-400 font-semibold mb-2 font-mono">
                 Wallet: {formatSolBalance(walletBalanceLamports)} SOL
               </p>
             )}
-            <p className="text-purple-300 mb-6 max-w-md font-mono text-sm">
-              Rate: {formatSol(ratePerSec)} SOL/sec
-            </p>
+            {!isDuelMode && walletAddress && (
+              <div className="mb-4 w-full max-w-xs mx-auto">
+                <label className="block text-purple-200 text-sm font-mono mb-1">Bet amount (SOL)</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  value={soloBetInput}
+                  onChange={(e) => setSoloBetInput(e.target.value)}
+                  placeholder="e.g. 0.005"
+                  className="w-full px-4 py-2 bg-black/50 border border-purple-500/50 rounded-lg text-white font-mono placeholder:text-purple-400/50 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent text-center"
+                />
+                {(() => {
+                  const val = parseFloat(soloBetInput);
+                  if (soloBetInput.trim() && Number.isFinite(val) && val > 0) {
+                    const rateLam = BigInt(Math.round(val * 1e9)) / 15n || 1n;
+                    return (
+                      <p className="text-purple-300 mt-2 font-mono text-sm">
+                        Rate: {formatSol(rateLam)} SOL/sec (break even in 15s)
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
+            )}
+            {!isDuelMode && !walletAddress && (
+              <p className="text-purple-300 mb-6 max-w-md font-mono text-sm">
+                Connect wallet to set your bet.
+              </p>
+            )}
+            {isDuelMode && lobbyData?.bet && (
+              <p className="text-purple-300 mb-4 max-w-md font-mono text-sm">
+                Pot: {formatSol(BigInt(lobbyData.bet) * 2n)} SOL ({formatSol(BigInt(lobbyData.bet))} SOL each)
+              </p>
+            )}
+            {/* Duel: ready status indicators */}
+            {isDuelMode && walletAddress && (
+              <div className="mb-6 space-y-2">
+                <div className="flex items-center justify-center gap-3">
+                  <div className={`w-3 h-3 rounded-full ${lobbyData?.hostReady ? 'bg-green-400' : 'bg-gray-500'}`} />
+                  <span className="text-white font-mono text-sm">Host {lobbyData?.hostReady ? '- READY' : '- Not ready'}</span>
+                </div>
+                <div className="flex items-center justify-center gap-3">
+                  <div className={`w-3 h-3 rounded-full ${lobbyData?.joinerReady ? 'bg-green-400' : 'bg-gray-500'}`} />
+                  <span className="text-white font-mono text-sm">Joiner {lobbyData?.joinerReady ? '- READY' : '- Not ready'}</span>
+                </div>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-              {!walletAddress ? (
+              {isDuelMode ? (
+                !walletAddress ? (
+                  <>
+                    <button
+                      onClick={() => void handleConnectWallet('phantom')}
+                      disabled={isWalletConnecting || loadingAudio}
+                      className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
+                    </button>
+                    <button
+                      onClick={() => void handleConnectWallet('privy')}
+                      disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
+                      className="px-8 py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-lg hover:from-cyan-500 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/30 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isWalletConnecting && walletConnectTarget === 'privy'
+                        ? 'Signing in with email...'
+                        : 'Use Email (Privy)'}
+                    </button>
+                  </>
+                ) : (() => {
+                  const myReady = role === 'host' ? lobbyData?.hostReady : lobbyData?.joinerReady;
+                  const opponentReady = role === 'host' ? lobbyData?.joinerReady : lobbyData?.hostReady;
+                  if (myReady && opponentReady) {
+                    return (
+                      <div className="text-emerald-400 font-mono font-bold py-4 animate-pulse">
+                        {isRequestingVrf ? 'Generating terrain...' : 'Starting countdown...'}
+                      </div>
+                    );
+                  }
+                  if (myReady) {
+                    return (
+                      <div className="text-emerald-400 font-mono font-bold py-4 animate-pulse">
+                        Waiting for opponent to ready up...
+                      </div>
+                    );
+                  }
+                  return (
+                    <button
+                      onClick={() => void handleDuelReady()}
+                      disabled={loadingAudio || isPayingBuyIn}
+                      className="px-12 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {isPayingBuyIn ? 'Confirm in wallet...' : "I'm Ready"}
+                    </button>
+                  );
+                })()
+              ) : !walletAddress ? (
                 <>
                   <button
                     onClick={() => void handleConnectWallet('phantom')}
@@ -885,7 +1365,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
                     ? 'Requesting VRF...'
                     : isPayingBuyIn
                       ? `Confirm in ${walletProviderName === 'privy' ? 'Privy' : 'Phantom'}...`
-                      : 'Pay Buy-In & Start'}
+                      : `Bet ${soloBetInput.trim() || '?'} SOL & Start`}
                 </button>
               )}
             </div>
@@ -967,7 +1447,7 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </div>
           )}
 
-          {hasExtracted && frozenEarned !== null && (
+          {hasExtracted && frozenEarned !== null && !isDuelMode && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
               <div className="bg-gradient-to-br from-purple-900/90 to-green-900/90 p-12 rounded-2xl border-2 border-green-500 shadow-2xl shadow-green-500/50">
                 <h2 className="text-5xl font-bold text-white mb-6 text-center bg-gradient-to-r from-green-300 to-cyan-300 bg-clip-text text-transparent">
@@ -1003,7 +1483,133 @@ export function GeometryDashGame({ width = 1200, height = 600 }: GeometryDashGam
             </div>
           )}
 
-          {isGameOver && (
+          {isDuelMode && (isGameOver || hasExtracted) && (() => {
+            const myStatus = role === 'host' ? lobbyData?.hostStatus : lobbyData?.joinerStatus;
+            const opponentStatus = role === 'host' ? lobbyData?.joinerStatus : lobbyData?.hostStatus;
+            const iDied = myStatus === 'died';
+            const opponentDied = opponentStatus === 'died';
+            const isTie = iDied && opponentDied;
+            const iWon = opponentDied && !iDied;
+            const iLost = iDied && !opponentDied;
+            const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
+            const potBaseUnits = betBaseUnits * 2n;
+
+            return (
+              <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
+                <div className={`p-12 rounded-2xl border-2 shadow-2xl max-w-lg ${
+                  iWon
+                    ? 'bg-gradient-to-br from-purple-900/90 to-green-900/90 border-green-500 shadow-green-500/50'
+                    : isTie
+                      ? 'bg-gradient-to-br from-purple-900/90 to-yellow-900/90 border-yellow-500 shadow-yellow-500/50'
+                      : 'bg-gradient-to-br from-purple-900/90 to-red-900/90 border-red-500 shadow-red-500/50'
+                }`}>
+                  <h2 className={`text-6xl font-bold mb-6 text-center bg-clip-text text-transparent ${
+                    iWon
+                      ? 'bg-gradient-to-r from-green-300 to-cyan-300'
+                      : isTie
+                        ? 'bg-gradient-to-r from-yellow-300 to-orange-300'
+                        : iLost
+                          ? 'bg-gradient-to-r from-red-300 to-pink-300'
+                          : 'bg-gradient-to-r from-purple-400 to-pink-400'
+                  }`}>
+                    {iWon ? 'YOU WIN!' : isTie ? 'DRAW!' : iLost ? 'YOU LOSE' : 'Waiting...'}
+                  </h2>
+                  <div className="text-center mb-6">
+                    {iWon ? (
+                      <>
+                        <div className="text-emerald-300 font-bold text-2xl mb-2">
+                          You win: {formatSol(duelClaimAmount ?? potBaseUnits)} SOL
+                        </div>
+                        {duelClaimAmount !== null && duelClaimAmount < potBaseUnits && (
+                          <div className="text-purple-300/80 font-mono text-xs mb-2">
+                            Capped by current on-chain claimable amount.
+                          </div>
+                        )}
+                        {isSettling && (
+                          <div className="text-cyan-300 font-mono text-sm animate-pulse">
+                            Claiming pot – confirm in wallet...
+                          </div>
+                        )}
+                        {settleSignature && (
+                          <div className="text-emerald-400 font-mono text-sm mt-1">
+                            Pot claimed!
+                          </div>
+                        )}
+                        {errorMessage && !settleSignature && !isSettling && (
+                          <div className="text-red-300 font-mono text-sm mt-1">
+                            {errorMessage}
+                          </div>
+                        )}
+                      </>
+                    ) : isTie ? (
+                      <>
+                        <div className="text-yellow-300 font-bold text-xl mb-2">
+                          Both died! Each player gets their bet back.
+                        </div>
+                        <div className="text-yellow-200/80 font-mono text-sm mb-1">
+                          Refund: {formatSol(duelClaimAmount ?? betBaseUnits)} SOL
+                        </div>
+                        {isSettling && (
+                          <div className="text-cyan-300 font-mono text-sm animate-pulse">
+                            Refunding – confirm in wallet...
+                          </div>
+                        )}
+                        {settleSignature && (
+                          <div className="text-emerald-400 font-mono text-sm mt-1">
+                            Refund complete!
+                          </div>
+                        )}
+                        {errorMessage && !settleSignature && !isSettling && (
+                          <div className="text-red-300 font-mono text-sm mt-1">
+                            {errorMessage}
+                          </div>
+                        )}
+                      </>
+                    ) : iLost ? (
+                      <div className="text-red-300 font-bold text-xl mb-2">
+                        You died first. Opponent wins the pot.
+                      </div>
+                    ) : (
+                      <div className="text-purple-300 font-mono animate-pulse">
+                        Waiting for opponent...
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-center mb-8">
+                    <div className="text-purple-200/70 font-mono text-sm">
+                      Your time: {formatSessionTime(Math.max(getElapsedSeconds(gameState), displayElapsedFallback))}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    {iWon && !settleSignature && !isSettling && (
+                      <button
+                        onClick={() => void duelClaimPot()}
+                        className="w-full px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
+                      >
+                        Claim Pot
+                      </button>
+                    )}
+                    {isTie && !settleSignature && !isSettling && (
+                      <button
+                        onClick={() => void duelRefund()}
+                        className="w-full px-8 py-4 bg-gradient-to-r from-yellow-600 to-orange-600 text-white font-bold rounded-lg hover:from-yellow-500 hover:to-orange-500 transition-all shadow-lg text-center"
+                      >
+                        Claim Refund
+                      </button>
+                    )}
+                    <Link
+                      href="/duels"
+                      className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg text-center hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg"
+                    >
+                      Back to Duels
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {isGameOver && !isDuelMode && (
             <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
               <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50">
                 <h2 className="text-5xl font-bold text-white mb-4 text-center bg-gradient-to-r from-red-300 to-pink-300 bg-clip-text text-transparent">
