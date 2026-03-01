@@ -1255,14 +1255,14 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       />
       {/* Duel countdown overlay */}
       {duelCountdown !== null && duelCountdown > 0 && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
           <div className="text-9xl font-bold text-white animate-ping" style={{ animationDuration: '0.8s' }}>
             {duelCountdown}
           </div>
         </div>
       )}
       {duelCountdown === 0 && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none animate-fade-in">
           <div className="text-7xl font-bold text-emerald-400 animate-pulse">GO!</div>
         </div>
       )}
@@ -1293,22 +1293,27 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         )}
       </div>
 
-      {/* Start / loading screen */}
-      {!hasStarted && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-10">
-          <div className="bg-black/50 backdrop-blur-sm rounded-2xl border-2 border-purple-500 p-12 text-center">
+      {/* Initial loader: single stable screen until audio is ready to avoid layout thrash */}
+      {!hasStarted && loadingAudio && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10 bg-black/30 rounded-lg">
+          <div className="w-12 h-12 border-4 border-purple-400/50 border-t-purple-300 rounded-full animate-spin" aria-hidden />
+          <p className="mt-4 text-purple-200 font-mono text-lg">Preparing game...</p>
+        </div>
+      )}
+
+      {/* Start screen: only after audio is loaded so content doesn't jump */}
+      {!hasStarted && !loadingAudio && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-10 animate-fade-in">
+          <div className="bg-black/50 backdrop-blur-sm rounded-2xl border-2 border-purple-500 p-12 text-center min-w-[22rem] min-h-[18rem] flex flex-col justify-center">
             <h2 className="text-3xl font-bold text-white mb-4 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              {loadingAudio
-                ? 'Loading Audio...'
-                : isDuelMode
-                  ? 'Duel Arena'
-                  : 'Ready to Play?'}
+              {isDuelMode ? 'Duel Arena' : 'Ready to Play?'}
             </h2>
             <p className="text-purple-200 mb-3 max-w-md">
               {isDuelMode
                 ? 'Both players must ready up. First to die loses the pot.'
                 : 'Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.'}
             </p>
+            <div className="min-h-[4rem] flex flex-col justify-center">
             {walletBalanceLamports !== null && (
               <p className="text-emerald-400 font-semibold mb-2 font-mono">
                 Wallet: {formatSolBalance(walletBalanceLamports)} SOL
@@ -1362,6 +1367,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 </div>
               </div>
             )}
+            </div>
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               {isDuelMode ? (
                 !walletAddress ? (
@@ -1569,7 +1575,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             const potBaseUnits = betBaseUnits * 2n;
 
             return (
-              <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
+              <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto animate-fade-in">
                 <div className={`p-12 rounded-2xl border-2 shadow-2xl max-w-lg ${
                   iWon
                     ? 'bg-gradient-to-br from-purple-900/90 to-green-900/90 border-green-500 shadow-green-500/50'
@@ -1684,7 +1690,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           })()}
 
           {isGameOver && !isDuelMode && (
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto animate-fade-in">
               <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50">
                 <h2 className="text-5xl font-bold text-white mb-4 text-center bg-gradient-to-r from-red-300 to-pink-300 bg-clip-text text-transparent">
                   GAME OVER

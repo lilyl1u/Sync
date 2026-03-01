@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { WakeLofiServer } from "./components/WakeLofiServer";
 
 export default function Home() {
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
+      <WakeLofiServer />
       {/* Layer 1: Gradient background */}
       <img
         src="/assets/backgrounds/first.svg"

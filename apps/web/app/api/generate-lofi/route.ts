@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
       console.log('[generate-lofi] Using weights:', weights);
     }
 
+    // Always call Modal /generate (no caching) — each game session gets fresh beats. With landing-page warm-up this is fast.
     console.log('[generate-lofi] Calling Modal generate', { weights, length, temperature });
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60_000);
