@@ -36,6 +36,7 @@ type DuelLobbyData = {
   hostStatus?: 'playing' | 'died' | 'extracted';
   joinerStatus?: 'playing' | 'died' | 'extracted';
   winner?: 'host' | 'joiner' | null;
+  bet?: string;
 };
 
 const PLAYER_SPEED = 300;
@@ -1226,6 +1227,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                   const bothDone = hostDone && joinerDone;
                   const hostTime = lobbyData?.hostSurvivalTime ?? 0;
                   const joinerTime = lobbyData?.joinerSurvivalTime ?? 0;
+                  // Winner = whoever survives longer; payout = sum of both bets (full pot)
                   const hostWins = hostTime >= joinerTime;
                   const localWon = (role === 'host' && hostWins) || (role === 'joiner' && !hostWins);
                   const isDraw = hostTime === joinerTime;
@@ -1246,17 +1248,32 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     );
                   }
 
+                  const betBaseUnits = BigInt(lobbyData?.bet ?? '0');
+                  const potBaseUnits = betBaseUnits * 2n;
+
                   return (
                     <>
                       <h2 className="text-5xl font-bold mb-6 text-center bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400">
                         {isDraw ? 'Draw!' : localWon ? 'You won!' : 'You lost!'}
                       </h2>
-                      <div className="text-center mb-8 space-y-2">
-                        <div className="text-purple-200 font-mono text-sm">
+                      <div className="text-center mb-6">
+                        <div className="text-emerald-300 font-bold text-xl mb-2">
+                          {localWon && !isDraw
+                            ? `You win the full pot: ${formatSol(potBaseUnits)} SOL`
+                            : !isDraw
+                              ? `Winner takes the full pot: ${formatSol(potBaseUnits)} SOL`
+                              : 'Pot split on draw'}
+                        </div>
+                        <p className="text-purple-300/80 text-sm font-mono">
+                          Winner takes the sum of both bets.
+                        </p>
+                      </div>
+                      <div className="text-center mb-8 space-y-2 text-purple-200/70 font-mono text-sm">
+                        <div>
                           Host: {formatSessionTime(hostTime)}
                           {lobbyData?.hostStatus === 'extracted' && ' (extracted)'}
                         </div>
-                        <div className="text-purple-200 font-mono text-sm">
+                        <div>
                           Joiner: {formatSessionTime(joinerTime)}
                           {lobbyData?.joinerStatus === 'extracted' && ' (extracted)'}
                         </div>
