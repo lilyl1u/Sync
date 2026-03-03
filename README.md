@@ -1,27 +1,24 @@
 # Sync
 
-## To run: 
+**Jump · Land · Survive**
 
-1. Install dependencies
-```npm install```
-2. Start the dev server
-```npm run dev```
+Beat-synced endless platformer: stake SOL, play solo or 1v1 duels. Terrain is verifiable (ORAO VRF); music is AI-generated (LSTM). Built with a custom TypeScript game engine, Next.js, and Solana/Anchor.
 
+## Run
 
-## Features
+```bash
+npm install
+npm run dev
+```
 
-### Game Engine
-- Game engine built with TypeScript
-- Physics engine with collision detection
-- Procedural level generation
+Open [http://localhost:3000](http://localhost:3000). For Solana gambling (staking, pool), see [Solana & Gambling Setup](packages/solana/README.md#setup-anchor-no-house-keypair) in `packages/solana/README.md`.
 
-### Solana Integration
-- Players bet on survival time predictions
-- Smart contracts built with Anchor
-- Accuracy-based payout system 
+## Commands
 
-### Spotify Integration
-- User authentication
-- Playlist and track data fetching
-- Audio feature extraction
+- `npm run dev` — start web app
+- `npm run build` — build all workspaces
+- `npm run setup:gambling` — deploy Anchor program + init pool (needs Anchor/Solana CLI)
 
+## Stack
+
+Next.js · React · TypeScript · Solana / Anchor · Privy · Firebase · Tone.js · Modal (LSTM API)
