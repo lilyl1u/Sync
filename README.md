@@ -1,7 +1,8 @@
 # Sync
 
-**Jump · Land · Survive**
+**Made during HackIllinois**
 
+Backend: https://github.com/michellee-wang/sync-ml-api
 Beat-synced endless platformer: stake SOL, play solo or 1v1 duels. Terrain is verifiable (ORAO VRF); music is AI-generated (LSTM). Built with a custom TypeScript game engine, Next.js, and Solana/Anchor.
 
 ## Run
