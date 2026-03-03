@@ -4,6 +4,8 @@
 
 Backend: https://github.com/michellee-wang/sync-ml-api
 
+Devpost: https://devpost.com/software/sync-mdn04e?ref_content=my-projects-tab&ref_feature=my_projects
+
 Beat-synced endless platformer: stake SOL, play solo or 1v1 duels. Terrain is verifiable (ORAO VRF); music is AI-generated (LSTM). Built with a custom TypeScript game engine, Next.js, and Solana/Anchor.
 
 ## Run
