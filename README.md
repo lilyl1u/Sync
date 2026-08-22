@@ -1,6 +1,6 @@
 # 🎵 Sync
 
-**Beat-synced endless platformer on Solana** — stake SOL, play solo or 1v1 duels, and run to AI-generated music.
+**Beat-synced endless platformer on Solana** : stake SOL, play solo or 1v1 duels, and run to AI-generated music.
 
 > Built at HackIllinois · [Devpost](https://devpost.com/software/sync-mdn04e?ref_content=my-projects-tab&ref_feature=my_projects) · [ML Backend Repo](https://github.com/michellee-wang/sync-ml-api)
 
