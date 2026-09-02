@@ -101,17 +101,50 @@ declare global {
   }
 }
 
-function getPhantomProvider(): PhantomProvider | null {
+function readPhantomProvider(): PhantomProvider | null {
   if (typeof window === 'undefined') {
     return null;
   }
 
-  const provider = window.phantom?.solana ?? window.solana;
-  if (!provider?.isPhantom) {
-    return null;
+  const fromPhantom = window.phantom?.solana;
+  if (fromPhantom && typeof fromPhantom.connect === 'function') {
+    return fromPhantom;
   }
 
-  return provider;
+  const fromSolana = window.solana;
+  if (fromSolana?.isPhantom && typeof fromSolana.connect === 'function') {
+    return fromSolana;
+  }
+
+  return null;
+}
+
+function waitForPhantomProvider(timeoutMs = 3000): Promise<PhantomProvider | null> {
+  const existing = readPhantomProvider();
+  if (existing) return Promise.resolve(existing);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (provider: PhantomProvider | null) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('load', check);
+      document.removeEventListener('phantom#initialized', check);
+      clearInterval(poll);
+      clearTimeout(timer);
+      resolve(provider);
+    };
+
+    const check = () => {
+      const provider = readPhantomProvider();
+      if (provider) finish(provider);
+    };
+
+    window.addEventListener('load', check);
+    document.addEventListener('phantom#initialized', check);
+    const poll = setInterval(check, 80);
+    const timer = setTimeout(() => finish(readPhantomProvider()), timeoutMs);
+  });
 }
 
 function toWalletAdapter(wallet: PrivySolanaWallet): WalletAdapterLike {
@@ -479,13 +512,18 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       let connectedWallet: WalletAdapterLike;
 
       if (target === 'phantom') {
-        const provider = getPhantomProvider();
-        if (!provider) throw new Error('Phantom wallet not found. Install Phantom and try again.');
+        setStatusMessage('Looking for Phantom...');
+        const provider = await waitForPhantomProvider();
+        if (!provider) {
+          throw new Error(
+            'Phantom was not detected in this browser. Install the Phantom extension, unlock it, then refresh — or open this site inside the Phantom mobile app.',
+          );
+        }
         setStatusMessage('Open Phantom to approve the connection...');
         const response = await withTimeout(
           provider.connect({ onlyIfTrusted: false }),
           60000,
-          'Wallet connection timed out.',
+          'Wallet connection timed out. Unlock Phantom and try again.',
         );
         connectedWallet = provider;
         setWalletAddress(response.publicKey.toBase58());
