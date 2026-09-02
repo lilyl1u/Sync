@@ -1292,10 +1292,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       />
       {/* Duel countdown overlay */}
       {duelCountdown !== null && duelCountdown > 0 && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--px-navy)]/80">
+        <div className="absolute inset-0 z-50 flex items-center justify-center px-overlay">
           <div className="px-title text-7xl">{duelCountdown}</div>
-            {duelCountdown}
-          </div>
         </div>
       )}
       {duelCountdown === 0 && (
@@ -1568,7 +1566,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
 
 
           {hasExtracted && frozenEarned !== null && !isDuelMode && (
-            <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center pointer-events-auto">
+            <div className="absolute inset-0 px-overlay flex items-center justify-center pointer-events-auto">
               <div className="px-panel p-8 max-w-md">
                 <h2 className="px-title text-2xl mb-6 text-center">
                   Congrats!
@@ -1615,7 +1613,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             const potBaseUnits = betBaseUnits * 2n;
 
             return (
-              <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center pointer-events-auto">
+              <div className="absolute inset-0 px-overlay flex items-center justify-center pointer-events-auto">
                 <div className="px-panel p-8 max-w-lg">
                   <h2 className="px-title text-xl mb-6 text-center">
                     {iWon ? 'YOU WIN!' : isTie ? 'DRAW!' : iLost ? 'YOU LOSE' : 'Waiting...'}
@@ -1714,7 +1712,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           })()}
 
           {isGameOver && !isDuelMode && (
-            <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center pointer-events-auto">
+            <div className="absolute inset-0 px-overlay flex items-center justify-center pointer-events-auto">
               <div className="px-panel p-8">
                 <h2 className="px-title text-2xl mb-4 text-center">
                   GAME OVER

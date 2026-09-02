@@ -55,7 +55,7 @@ export const GameUI: React.FC<GameUIProps> = ({
       )}
 
       {isPaused && !isGameOver && (
-        <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center">
+        <div className="absolute inset-0 px-overlay flex items-center justify-center">
           <div className="px-panel p-8 text-center">
             <h2 className="px-title text-3xl mb-8">PAUSED</h2>
             <div className="flex gap-3 justify-center">
@@ -71,7 +71,7 @@ export const GameUI: React.FC<GameUIProps> = ({
       )}
 
       {isGameOver && (
-        <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center">
+        <div className="absolute inset-0 px-overlay flex items-center justify-center">
           <div className="px-panel p-8 text-center max-w-md">
             <h2 className="px-title text-2xl mb-4">GAME OVER</h2>
             <div className="my-6">

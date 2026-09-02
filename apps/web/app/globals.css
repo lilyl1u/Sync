@@ -206,6 +206,10 @@ body {
   background: #fffdf8;
 }
 
+.px-overlay {
+  background: rgba(22, 48, 90, 0.82);
+}
+
 .px-star {
   position: absolute;
   width: 8px;
