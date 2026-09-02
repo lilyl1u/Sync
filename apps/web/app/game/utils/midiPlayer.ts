@@ -1,88 +1,163 @@
 /**
- * Play MIDI in the browser using Tone.js.
- * Parses base64 MIDI and schedules notes via Tone.Synth.
+ * Play LSTM MIDI as a single melody line through a kit-matched voice.
+ * Full-dump PolySynth chords on top of the kit is what made runs sound broken.
  */
 import * as Tone from 'tone';
 import { Midi } from '@tonejs/midi';
+import type { GenreId } from './genreKits';
 
-let midiPlayerInstance: {
-  synth: Tone.PolySynth;
-  scheduledId: number;
-} | null = null;
+type MelodyNote = { time: number; duration: number; midi: number; velocity: number };
 
-function getMidiPlayer() {
-  if (!midiPlayerInstance) {
-    const synth = new Tone.PolySynth().toDestination();
-    midiPlayerInstance = {
-      synth,
-      scheduledId: 0,
-    };
-  }
-  return midiPlayerInstance;
-}
+type MidiHandle = {
+  nodes: Tone.ToneAudioNode[];
+  parts: Tone.Part[];
+};
 
-/** Convert MIDI note number to note name (e.g. 60 -> "C4") */
+let midiHandle: MidiHandle | null = null;
+
 function midiToNoteName(midi: number): string {
   const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const octave = Math.floor(midi / 12) - 1;
-  const name = names[midi % 12];
-  return `${name}${octave}`;
+  return `${names[midi % 12]}${octave}`;
 }
 
-/** volume 0–1 (e.g. 0.5 for 50% when layering with audio.mp4) */
-export async function playMidi(midiBase64: string, volume = 1): Promise<void> {
-  console.log('[playMidi] called, midiBase64 length:', midiBase64?.length, 'volume:', volume);
-  try {
-    console.log('[playMidi] Tone.start()...');
-    await Tone.start();
-    console.log('[playMidi] Tone.start() done, context state:', (Tone.getContext() as { rawContext?: AudioContext })?.rawContext?.state);
-
-    const { synth } = getMidiPlayer();
-    synth.releaseAll();
-    synth.toDestination();
-    synth.volume.value = volume <= 0 ? -Infinity : 20 * Math.log10(volume);
-
-    const bytes = Uint8Array.from(atob(midiBase64), (c) => c.charCodeAt(0));
-    console.log('[playMidi] Decoded MIDI bytes:', bytes.length);
-    const midi = new Midi(bytes.buffer);
-    console.log('[playMidi] Midi tracks:', midi.tracks.length);
-
-    const now = Tone.now();
-    let noteCount = 0;
-    for (const track of midi.tracks) {
-      for (const note of track.notes) {
-        const noteName = midiToNoteName(note.midi);
-        synth.triggerAttackRelease(
-          noteName,
-          note.duration,
-          now + note.time,
-          note.velocity
-        );
-        noteCount++;
-      }
+function extractMelody(midi: Midi): MelodyNote[] {
+  const all: MelodyNote[] = [];
+  for (const track of midi.tracks) {
+    for (const note of track.notes) {
+      if (note.midi < 50 || note.midi > 86) continue;
+      all.push({
+        time: note.time,
+        duration: Math.min(Math.max(note.duration, 0.09), 0.85),
+        midi: note.midi,
+        velocity: Math.min(0.55, note.velocity * 0.5),
+      });
     }
-    console.log('[playMidi] Scheduled notes:', noteCount, 'Tone.now():', now);
-  } catch (e) {
-    console.log('[playMidi] Error:', e);
-    throw e;
   }
+  all.sort((a, b) => a.time - b.time || b.midi - a.midi);
+  const out: MelodyNote[] = [];
+  for (const note of all) {
+    const prev = out[out.length - 1];
+    if (prev && note.time - prev.time < 0.1) {
+      if (note.midi > prev.midi) out[out.length - 1] = note;
+      continue;
+    }
+    out.push(note);
+  }
+  return out.slice(0, 360);
+}
+
+function makeVoice(kitId: GenreId, dest: Tone.ToneAudioNode): Tone.Synth | Tone.FMSynth | Tone.AMSynth {
+  if (kitId === 'lofi') {
+    const synth = new Tone.FMSynth({
+      harmonicity: 2,
+      modulationIndex: 1.4,
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.015, decay: 0.35, sustain: 0.15, release: 0.45 },
+      modulation: { type: 'sine' },
+      modulationEnvelope: { attack: 0.01, decay: 0.2, sustain: 0.05, release: 0.25 },
+    }).connect(dest);
+    synth.volume.value = -12;
+    return synth;
+  }
+  if (kitId === 'neon') {
+    const synth = new Tone.Synth({
+      oscillator: { type: 'sawtooth' },
+      envelope: { attack: 0.02, decay: 0.18, sustain: 0.25, release: 0.3 },
+    }).connect(dest);
+    synth.volume.value = -16;
+    return synth;
+  }
+  if (kitId === 'chip') {
+    const synth = new Tone.Synth({
+      oscillator: { type: 'square' },
+      envelope: { attack: 0.001, decay: 0.08, sustain: 0.1, release: 0.05 },
+    }).connect(dest);
+    synth.volume.value = -15;
+    return synth;
+  }
+  if (kitId === 'breaks') {
+    const synth = new Tone.FMSynth({
+      harmonicity: 1.5,
+      modulationIndex: 2,
+      oscillator: { type: 'triangle' },
+      envelope: { attack: 0.005, decay: 0.12, sustain: 0.05, release: 0.1 },
+    }).connect(dest);
+    synth.volume.value = -14;
+    return synth;
+  }
+  const synth = new Tone.AMSynth({
+    oscillator: { type: 'sine' },
+    envelope: { attack: 0.08, decay: 0.4, sustain: 0.4, release: 1.2 },
+  }).connect(dest);
+  synth.volume.value = -14;
+  return synth;
 }
 
 export function stopMidi(): void {
-  const player = midiPlayerInstance;
-  if (player) {
-    player.synth.releaseAll();
-    // Disconnect so any already-scheduled notes are inaudible
-    player.synth.disconnect();
+  if (!midiHandle) return;
+  for (const part of midiHandle.parts) {
+    part.stop();
+    part.dispose();
   }
+  for (const node of midiHandle.nodes) node.dispose();
+  midiHandle = null;
+}
+
+export async function scheduleMidiMelody(midiBase64: string, kitId: GenreId): Promise<void> {
+  stopMidi();
+  const bytes = Uint8Array.from(atob(midiBase64), (c) => c.charCodeAt(0));
+  const midi = new Midi(bytes.buffer);
+  const notes = extractMelody(midi);
+  if (notes.length === 0) return;
+
+  const limiter = new Tone.Limiter(-1.5).toDestination();
+  const filter = new Tone.Filter(kitId === 'dream' ? 1800 : 2400, 'lowpass').connect(limiter);
+  const voice = makeVoice(kitId, filter);
+  const nodes: Tone.ToneAudioNode[] = [limiter, filter, voice];
+
+  if (kitId === 'dream' || kitId === 'lofi') {
+    const reverb = new Tone.Reverb({ decay: kitId === 'dream' ? 4 : 1.6, wet: kitId === 'dream' ? 0.4 : 0.18 });
+    await reverb.generate();
+    filter.disconnect();
+    filter.connect(reverb);
+    reverb.connect(limiter);
+    nodes.push(reverb);
+  }
+
+  if (kitId === 'neon') {
+    const delay = new Tone.FeedbackDelay({ delayTime: '8n', feedback: 0.2, wet: 0.18 }).connect(filter);
+    voice.disconnect();
+    voice.connect(delay);
+    nodes.push(delay);
+  }
+
+  const part = new Tone.Part((time, note: MelodyNote) => {
+    voice.triggerAttackRelease(midiToNoteName(note.midi), note.duration, time, note.velocity);
+  }, notes);
+  part.start(0);
+
+  midiHandle = { nodes, parts: [part] };
+}
+
+/** @deprecated volume ignored; kit-matched melody is scheduled on the transport */
+export async function playMidi(midiBase64: string, _volume = 1, kitId: GenreId = 'lofi'): Promise<void> {
+  await Tone.start();
+  await scheduleMidiMelody(midiBase64, kitId);
 }
 
 export function pauseMidi(): void {
-  const raw = (Tone.getContext() as { rawContext?: AudioContext }).rawContext;
-  if (raw?.suspend) raw.suspend();
+  try {
+    Tone.getTransport().pause();
+  } catch {
+    /* ignore */
+  }
 }
 
 export function resumeMidi(): void {
-  const raw = (Tone.getContext() as { rawContext?: AudioContext }).rawContext;
-  if (raw?.resume) raw.resume();
+  try {
+    Tone.getTransport().start();
+  } catch {
+    /* ignore */
+  }
 }

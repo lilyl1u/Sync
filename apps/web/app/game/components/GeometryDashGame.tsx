@@ -27,7 +27,17 @@ import { requestAndWaitFulfilled } from '@/lib/oraoVrf';
 import { db } from '@/lib/firebase';
 
 import type { DetectedBeat } from '../utils/beatDetector';
-import { getPreloadedAssets, preloadGameAssets } from '../utils/gamePreload';
+import { fillMidiQueue, midiQueueSize, subscribeMidiQueue, takeMidiForRun } from '../utils/gamePreload';
+import {
+  beatsFromKit,
+  GENRE_STORAGE_KEY,
+  parseStoredGenre,
+  resolveGenreKit,
+  type GenreChoice,
+  type GenreKit,
+} from '../utils/genreKits';
+import { pauseGenreKit, resumeGenreKit, startGenreKit, stopGenreKit } from '../utils/kitPlayer';
+import { GenrePicker } from './GenrePicker';
 import * as Tone from 'tone';
 import { playMidi, stopMidi, pauseMidi as pauseMidiPlayback, resumeMidi as resumeMidiPlayback } from '../utils/midiPlayer';
 
@@ -48,19 +58,9 @@ type DuelLobbyData = {
 };
 
 const PLAYER_SPEED = 300;
-/** Background track; always used for playback so game starts fast. */
 const BG_MP4_URL = '/audio.mp4';
 const BG_VOLUME = 0.5;
-const MIDI_VOLUME = 0.5;
-
-/** Synthetic beats when LOFI/song unavailable: one beat every 0.5s for 2 min. */
-function syntheticBeats(): DetectedBeat[] {
-  const beats: DetectedBeat[] = [];
-  for (let t = 0; t < 120; t += 0.5) {
-    beats.push({ time: t, intensity: 0.7 });
-  }
-  return beats;
-}
+const MIDI_VOLUME = 0.32;
 
 interface GeometryDashGameProps {
   width?: number;
@@ -239,13 +239,17 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const audioStartedRef = useRef(false);
   const beatsRef = useRef<DetectedBeat[]>([]);
   const midiBase64Ref = useRef<string | null>(null);
+  const activeKitRef = useRef<GenreKit | null>(null);
+  const kitSeedRef = useRef(0);
   const bgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [genreChoice, setGenreChoice] = useState<GenreChoice>('random');
+  const [midiReady, setMidiReady] = useState(0);
+  const [kitLabel, setKitLabel] = useState<string>('Random');
 
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isGameOver, setIsGameOver] = useState(false);
   const [hasExtracted, setHasExtracted] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
-  const hasStartedRef = useRef(false);
   const [audioLoaded, setAudioLoaded] = useState(false);
   const [audioError, setAudioError] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(false);
@@ -316,12 +320,43 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   }, [duelCode, role]);
 
   useEffect(() => {
-    hasStartedRef.current = hasStarted;
-  }, [hasStarted]);
+    try {
+      const saved = parseStoredGenre(window.localStorage.getItem(GENRE_STORAGE_KEY));
+      if (saved) setGenreChoice(saved);
+    } catch {
+      /* ignore */
+    }
+    fillMidiQueue();
+    setMidiReady(midiQueueSize());
+    return subscribeMidiQueue(() => setMidiReady(midiQueueSize()));
+  }, []);
+
+  const selectGenre = useCallback((choice: GenreChoice) => {
+    setGenreChoice(choice);
+    try {
+      window.localStorage.setItem(GENRE_STORAGE_KEY, choice);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const applyRunSoundtrack = useCallback((seed: number) => {
+    const kit = resolveGenreKit(genreChoice, seed);
+    activeKitRef.current = kit;
+    kitSeedRef.current = seed;
+    setKitLabel(kit.label);
+    const clip = takeMidiForRun();
+    if (clip) {
+      beatsRef.current = clip.beats;
+      midiBase64Ref.current = clip.midiBase64;
+    } else {
+      beatsRef.current = beatsFromKit(kit, seed);
+      midiBase64Ref.current = null;
+    }
+  }, [genreChoice]);
 
   // ------------------------------------------------------------------
-  // Load audio/beats quickly: try LOFI API with short timeout, else synthetic beats.
-  // No heavy decode so "Ready to play" appears in ~1–2s.
+  // Canvas renderer only — music is applied at run start so it can change every run.
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -329,32 +364,18 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let cancelled = false;
     const renderer = new Renderer({ canvas, width, height });
     rendererRef.current = renderer;
-
-    const preloaded = getPreloadedAssets();
-    if (preloaded?.beats.length) {
-      beatsRef.current = preloaded.beats;
-      midiBase64Ref.current = preloaded.midiBase64;
-    } else {
-      beatsRef.current = syntheticBeats();
-    }
+    fillMidiQueue();
     setAudioLoaded(true);
     setLoadingAudio(false);
 
-    void preloadGameAssets().then((assets) => {
-      if (cancelled || hasStartedRef.current) return;
-      beatsRef.current = assets.beats;
-      midiBase64Ref.current = assets.midiBase64;
-    });
-
     return () => {
-      cancelled = true;
       engineRef.current?.destroy();
       engineRef.current = null;
       rendererRef.current = null;
-      stopAudio();
+      stopGenreKit();
+      stopMidi();
       if (audioCtxRef.current?.state !== 'closed') {
         audioCtxRef.current?.close();
       }
@@ -382,50 +403,28 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   }, []);
 
   const playAudio = useCallback(() => {
-    console.log('[playAudio] called, midiBase64Ref.current:', !!midiBase64Ref.current, 'length:', midiBase64Ref.current?.length ?? 0);
-    startBgMp4();
-
+    const kit = activeKitRef.current;
+    const seed = kitSeedRef.current;
     const midiB64 = midiBase64Ref.current;
-    if (midiB64) {
-      console.log('[playAudio] Has MIDI, calling Tone.start() then playMidi');
-      Tone.start()
-        .then(() => {
-          console.log('[playAudio] Tone.start() resolved, calling playMidi');
-          return playMidi(midiB64, MIDI_VOLUME);
-        })
-        .then(() => console.log('[playAudio] playMidi() completed'))
-        .catch((e) => console.log('[playAudio] Tone/playMidi error:', e));
-      audioStartedRef.current = true;
-      return;
-    }
-    console.log('[playAudio] No MIDI, buffer path not used (synthetic beats)');
-
-    const audioCtx = audioCtxRef.current;
-    const buffer = audioBufferRef.current;
-    if (!audioCtx || !buffer) return;
-
-    try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
-
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    const gainNode = audioCtx.createGain();
-    gainNode.gain.value = BG_VOLUME;
-    source.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    source.start(0);
-    sourceNodeRef.current = source;
     audioStartedRef.current = true;
 
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (kit) {
+      void startGenreKit(kit, seed).catch((e) => console.log('[playAudio] kit error:', e));
+      return;
+    }
+
+    startBgMp4();
+    if (midiB64) {
+      void Tone.start()
+        .then(() => playMidi(midiB64, MIDI_VOLUME))
+        .catch((e) => console.log('[playAudio] midi error:', e));
+    }
   }, [startBgMp4]);
 
   const stopAudio = useCallback(() => {
     stopBgMp4();
-    if (midiBase64Ref.current) {
-      stopMidi();
-      audioStartedRef.current = false;
-      return;
-    }
+    stopGenreKit();
+    stopMidi();
     try { sourceNodeRef.current?.stop(); } catch { /* ignore */ }
     sourceNodeRef.current = null;
     audioStartedRef.current = false;
@@ -434,23 +433,18 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const pauseAudio = useCallback(() => {
     const el = bgAudioRef.current;
     if (el) el.pause();
-    if (midiBase64Ref.current) {
-      pauseMidiPlayback();
-      return;
-    }
+    pauseGenreKit();
+    pauseMidiPlayback();
     audioCtxRef.current?.suspend();
   }, []);
 
   const resumeAudio = useCallback(() => {
     const el = bgAudioRef.current;
-    if (el) {
-      el.volume = BG_VOLUME;
+    if (el && !el.paused && el.currentTime > 0) {
       el.play().catch(() => {});
     }
-    if (midiBase64Ref.current) {
-      resumeMidiPlayback();
-      return;
-    }
+    resumeGenreKit();
+    resumeMidiPlayback();
     audioCtxRef.current?.resume();
   }, []);
 
@@ -891,6 +885,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   // Duel: countdown 3-2-1 then start (timers stored in ref to survive status changes)
   // ------------------------------------------------------------------
   const startDuelEngine = useCallback((seed: number) => {
+    applyRunSoundtrack(seed);
     const newEngine = buildLevelAndEngine(seed);
     if (!newEngine) return;
     engineRef.current = newEngine;
@@ -916,7 +911,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         joinerStatus: 'playing',
       });
     }
-  }, [buildLevelAndEngine, audioLoaded, playAudio, role, duelCode]);
+  }, [applyRunSoundtrack, buildLevelAndEngine, audioLoaded, playAudio, role, duelCode]);
 
   useEffect(() => {
     if (!isDuelMode || !lobbyData || hasStarted) return;
@@ -1005,6 +1000,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
         setTerrainSeed(vrfResult.seed);
         setVrfRequestTx(vrfResult.requestTx);
 
+        applyRunSoundtrack(vrfResult.seed);
         const newEngine = buildLevelAndEngine(vrfResult.seed);
         if (!newEngine) throw new Error('Failed to build level');
         engineRef.current = newEngine;
@@ -1057,12 +1053,13 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     } finally {
       setIsPayingBuyIn(false);
     }
-  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine, isDuelMode, soloBetInput]);
+  }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine, applyRunSoundtrack, isDuelMode, soloBetInput]);
 
   const handleStartPractice = useCallback(() => {
     if (hasStarted || isDuelMode) return;
     const seed = Math.floor(Math.random() * 1_000_000_000);
     setTerrainSeed(seed);
+    applyRunSoundtrack(seed);
     const engine = buildLevelAndEngine(seed);
     if (!engine) {
       setErrorMessage('Failed to build level');
@@ -1085,7 +1082,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     setHasExtracted(false);
     gameContainerRef.current?.focus();
     if (audioLoaded) playAudio();
-  }, [hasStarted, isDuelMode, buildLevelAndEngine, audioLoaded, playAudio]);
+  }, [hasStarted, isDuelMode, buildLevelAndEngine, applyRunSoundtrack, audioLoaded, playAudio]);
 
   useEffect(() => {
     if (!autoStartAfterPrivyConnect) return;
@@ -1350,6 +1347,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 ? 'Both players must ready up. First to die loses the pot.'
                 : 'Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.'}
             </p>
+            <GenrePicker value={genreChoice} onChange={selectGenre} midiReady={midiReady} />
             <div className="min-h-[4rem] flex flex-col justify-center">
             {walletBalanceLamports !== null && (
               <p className="mb-2 text-[10px]">
@@ -1519,7 +1517,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             <div className="absolute top-24 left-8 px-hud px-4 py-2">
               <div className="text-[9px] flex items-center gap-2">
                 <span className="inline-block w-2 h-2 bg-[var(--px-pink)] px-blink" />
-                Beat Sync
+                {kitLabel}{midiBase64Ref.current ? ' + LSTM' : ''}
               </div>
             </div>
           )}
