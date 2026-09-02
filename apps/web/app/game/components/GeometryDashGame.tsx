@@ -27,6 +27,7 @@ import { requestAndWaitFulfilled } from '@/lib/oraoVrf';
 import { db } from '@/lib/firebase';
 
 import type { DetectedBeat } from '../utils/beatDetector';
+import { getPreloadedAssets, preloadGameAssets } from '../utils/gamePreload';
 import * as Tone from 'tone';
 import { playMidi, stopMidi, pauseMidi as pauseMidiPlayback, resumeMidi as resumeMidiPlayback } from '../utils/midiPlayer';
 
@@ -47,8 +48,6 @@ type DuelLobbyData = {
 };
 
 const PLAYER_SPEED = 300;
-const LOFI_API = '/api/generate-lofi';
-const LOFI_TIMEOUT_MS = 55000;
 /** Background track; always used for playback so game starts fast. */
 const BG_MP4_URL = '/audio.mp4';
 const BG_VOLUME = 0.5;
@@ -213,6 +212,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const [isGameOver, setIsGameOver] = useState(false);
   const [hasExtracted, setHasExtracted] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const hasStartedRef = useRef(false);
   const [audioLoaded, setAudioLoaded] = useState(false);
   const [audioError, setAudioError] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(true);
@@ -282,6 +282,10 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     };
   }, [duelCode, role]);
 
+  useEffect(() => {
+    hasStartedRef.current = hasStarted;
+  }, [hasStarted]);
+
   // ------------------------------------------------------------------
   // Load audio/beats quickly: try LOFI API with short timeout, else synthetic beats.
   // No heavy decode so "Ready to play" appears in ~1–2s.
@@ -296,61 +300,21 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     const renderer = new Renderer({ canvas, width, height });
     rendererRef.current = renderer;
 
-    (async () => {
-      console.log('[LOFI] Load started, timeout ms:', LOFI_TIMEOUT_MS);
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), LOFI_TIMEOUT_MS);
-        let lofiOk = false;
-        try {
-          console.log('[LOFI] Fetching', LOFI_API);
-          const lofiRes = await fetch(LOFI_API, { method: 'POST', signal: controller.signal });
-          clearTimeout(timeoutId);
-          console.log('[LOFI] Response ok:', lofiRes.ok, 'status:', lofiRes.status);
-          if (cancelled) return;
-          if (lofiRes.ok) {
-            const data = await lofiRes.json();
-            console.log('[LOFI] Data keys:', Object.keys(data), 'beats count:', (data.beats as number[])?.length, 'has midiBase64:', !!data.midiBase64, 'midiBase64 length:', typeof data.midiBase64 === 'string' ? data.midiBase64.length : 0);
-            const beats: DetectedBeat[] = (data.beats as number[]).map((time: number, i: number) => ({
-              time,
-              intensity: (data.intensities as number[])?.[i] ?? 0.5,
-            }));
-            if (beats.length > 0) {
-              beatsRef.current = beats;
-              midiBase64Ref.current = data.midiBase64 ?? null;
-              console.log('[LOFI] Success: beats=', beats.length, 'midiBase64Ref set:', !!midiBase64Ref.current);
-              setAudioLoaded(true);
-              lofiOk = true;
-            } else {
-              console.log('[LOFI] Beats empty, skipping');
-            }
-          } else {
-            const text = await lofiRes.text();
-            console.log('[LOFI] Response not ok body:', text.slice(0, 200));
-          }
-        } catch (e) {
-          clearTimeout(timeoutId);
-          console.log('[LOFI] Fetch error:', e);
-        }
-        if (cancelled) return;
-        if (lofiOk) {
-          setLoadingAudio(false);
-          return;
-        }
+    const preloaded = getPreloadedAssets();
+    if (preloaded?.beats.length) {
+      beatsRef.current = preloaded.beats;
+      midiBase64Ref.current = preloaded.midiBase64;
+    } else {
+      beatsRef.current = syntheticBeats();
+    }
+    setAudioLoaded(true);
+    setLoadingAudio(false);
 
-        console.log('[LOFI] Fallback: synthetic beats');
-        midiBase64Ref.current = null;
-        beatsRef.current = syntheticBeats();
-        setAudioLoaded(true);
-      } catch (e) {
-        console.log('[LOFI] Outer catch:', e);
-        beatsRef.current = syntheticBeats();
-        setAudioLoaded(true);
-        setAudioError(true);
-      } finally {
-        setLoadingAudio(false);
-      }
-    })();
+    void preloadGameAssets().then((assets) => {
+      if (cancelled || hasStartedRef.current) return;
+      beatsRef.current = assets.beats;
+      midiBase64Ref.current = assets.midiBase64;
+    });
 
     return () => {
       cancelled = true;
