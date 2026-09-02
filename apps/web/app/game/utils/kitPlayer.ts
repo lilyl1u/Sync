@@ -7,6 +7,9 @@ type KitHandle = {
   players: Tone.Player[];
 };
 
+type ChordHit = { time: number; chord: number[] };
+type NoteHit = { time: number; note: number };
+
 let active: KitHandle | null = null;
 let startToken = 0;
 
@@ -88,7 +91,7 @@ function drumPart(
   for (const s of kit.kickSteps) events.push({ time: s * step, kind: 'kick' });
   for (const s of kit.snareSteps) events.push({ time: s * step, kind: 'snare' });
   for (const s of kit.hatSteps) events.push({ time: s * step, kind: 'hat' });
-  const part = new Tone.Part((time, value: { kind: 'kick' | 'snare' | 'hat' }) => {
+  const part = new Tone.Part((time, value: { time: number; kind: 'kick' | 'snare' | 'hat' }) => {
     onHit(time, value.kind);
   }, events);
   part.loop = true;
@@ -179,14 +182,14 @@ function buildKit(kit: GenreKit, seed: number): KitHandle {
     bass.volume.value = -8;
     nodes.push(keys, bass);
 
-    const keysPart = new Tone.Part((time, chord: number[]) => {
-      keys.triggerAttackRelease(chord.slice(0, 3).map(midiNote), '1n', time, 0.45);
+    const keysPart = new Tone.Part((time, value: ChordHit) => {
+      keys.triggerAttackRelease(value.chord.slice(0, 3).map(midiNote), '1n', time, 0.45);
     }, chords.map((chord, i) => ({ time: transportTime(i * 2), chord })));
     keysPart.loop = true;
     keysPart.loopEnd = '8m';
     parts.push(keysPart);
-    const bassPart = new Tone.Part((time, note: number) => {
-      bass.triggerAttackRelease(midiNote(note), '4n', time, 0.7);
+    const bassPart = new Tone.Part((time, value: NoteHit) => {
+      bass.triggerAttackRelease(midiNote(value.note), '4n', time, 0.7);
     }, chords.flatMap((chord, i) => [
       { time: transportTime(i * 2), note: chord[0] - 12 },
       { time: transportTime(i * 2, 2), note: chord[0] - 12 },
@@ -217,14 +220,14 @@ function buildKit(kit: GenreKit, seed: number): KitHandle {
     nodes.push(bass, pad);
     hat.volume.value = -26;
 
-    const padPart = new Tone.Part((time, chord: number[]) => {
-      pad.triggerAttackRelease(chord.slice(0, 3).map(midiNote), '2m', time, 0.25);
+    const padPart = new Tone.Part((time, value: ChordHit) => {
+      pad.triggerAttackRelease(value.chord.slice(0, 3).map(midiNote), '2m', time, 0.25);
     }, chords.map((chord, i) => ({ time: transportTime(i * 2), chord })));
     padPart.loop = true;
     padPart.loopEnd = '8m';
     parts.push(padPart);
-    const bassPart = new Tone.Part((time, note: number) => {
-      bass.triggerAttackRelease(midiNote(note), '4n', time, 0.75);
+    const bassPart = new Tone.Part((time, value: NoteHit) => {
+      bass.triggerAttackRelease(midiNote(value.note), '4n', time, 0.75);
     }, chords.flatMap((chord, bar) => {
       const root = chord[0] - 12;
       return [
@@ -258,8 +261,8 @@ function buildKit(kit: GenreKit, seed: number): KitHandle {
 
     const arpPattern = [0, 1, 2, 1, 0, 2, 3, 1];
     const step8 = Tone.Time('8n').toSeconds();
-    const arpPart = new Tone.Part((time, note: number) => {
-      lead.triggerAttackRelease(midiNote(note), '16n', time, 0.5);
+    const arpPart = new Tone.Part((time, value: NoteHit) => {
+      lead.triggerAttackRelease(midiNote(value.note), '16n', time, 0.5);
     }, chords.flatMap((chord, bar) =>
       arpPattern.map((idx, i) => ({
         time: bar * Tone.Time('1m').toSeconds() + i * step8,
@@ -269,8 +272,8 @@ function buildKit(kit: GenreKit, seed: number): KitHandle {
     arpPart.loop = true;
     arpPart.loopEnd = '4m';
     parts.push(arpPart);
-    const bassPart = new Tone.Part((time, note: number) => {
-      bass.triggerAttackRelease(midiNote(note), '8n', time, 0.6);
+    const bassPart = new Tone.Part((time, value: NoteHit) => {
+      bass.triggerAttackRelease(midiNote(value.note), '8n', time, 0.6);
     }, chords.flatMap((chord, i) => [
       { time: transportTime(i), note: chord[0] - 24 },
       { time: transportTime(i, 2), note: chord[0] - 24 },
@@ -300,9 +303,9 @@ function buildKit(kit: GenreKit, seed: number): KitHandle {
     hat.volume.value = -20;
     kick.volume.value = -5;
 
-    const bassPart = new Tone.Part((time, note: number) => {
-      sub.triggerAttackRelease(midiNote(note), '8n', time, 0.85);
-      stab.triggerAttackRelease(midiNote(note + 12), '16n', time, 0.35);
+    const bassPart = new Tone.Part((time, value: NoteHit) => {
+      sub.triggerAttackRelease(midiNote(value.note), '8n', time, 0.85);
+      stab.triggerAttackRelease(midiNote(value.note + 12), '16n', time, 0.35);
     }, chords.flatMap((chord, i) => [
       { time: transportTime(0, i), note: chord[0] },
       { time: transportTime(0, i, 2), note: chord[0] },
@@ -334,9 +337,9 @@ function buildKit(kit: GenreKit, seed: number): KitHandle {
     snare.volume.value = -Infinity;
     hat.volume.value = -28;
 
-    const padPart = new Tone.Part((time, chord: number[]) => {
-      pad.triggerAttackRelease(chord.slice(0, 4).map(midiNote), '2m', time, 0.35);
-      bell.triggerAttackRelease(midiNote(chord[2] + 12), '2n', time, 0.25);
+    const padPart = new Tone.Part((time, value: ChordHit) => {
+      pad.triggerAttackRelease(value.chord.slice(0, 4).map(midiNote), '2m', time, 0.35);
+      bell.triggerAttackRelease(midiNote(value.chord[2] + 12), '2n', time, 0.25);
     }, chords.map((chord, i) => ({ time: transportTime(i * 2), chord })));
     padPart.loop = true;
     padPart.loopEnd = '8m';
