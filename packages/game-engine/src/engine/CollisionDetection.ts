@@ -1,5 +1,5 @@
 // Axis-Aligned Bounding Box (AABB) collision detection system
-import { GameObject, Vector2D, GameObjectType } from '../types';
+import { GameObject, Vector2D, GameObjectType, isObstacleType } from '../types';
 
 /** Padding for obstacle bounds - prevents jump-through on sides/bottom. No top padding on blocks so players can land on them. */
 const OBSTACLE_SIDE_PADDING = 4;
@@ -9,6 +9,22 @@ const OBSTACLE_SIDE_PADDING = 4;
 const SPIKE_INSET_SIDES = 8;  // Generous: triangle is narrow near edges
 const SPIKE_INSET_TOP = 12;   // Very generous: tip is thin, shouldn't kill on near-miss
 const SPIKE_INSET_BOTTOM = 2; // Small: base of triangle is wide
+
+function aabb(
+  player: GameObject,
+  left: number,
+  right: number,
+  top: number,
+  bottom: number,
+): boolean {
+  if (left >= right || top >= bottom) return false;
+  return (
+    player.position.x < right &&
+    player.position.x + player.size.x > left &&
+    player.position.y < bottom &&
+    player.position.y + player.size.y > top
+  );
+}
 
 export class CollisionDetection {
   /**
@@ -32,31 +48,45 @@ export class CollisionDetection {
    * - OBSTACLE_SPIKE: full padding on all sides
    */
   static checkObstacleCollision(player: GameObject, obstacle: GameObject): boolean {
+    const { x, y } = obstacle.position;
+    const { x: w, y: h } = obstacle.size;
+
     if (obstacle.type === GameObjectType.OBSTACLE_BLOCK) {
       const p = OBSTACLE_SIDE_PADDING;
-      const left = obstacle.position.x - p;
-      const right = obstacle.position.x + obstacle.size.x + p;
-      const top = obstacle.position.y; // No top padding - landable
-      const bottom = obstacle.position.y + obstacle.size.y + p;
-      return (
-        player.position.x < right &&
-        player.position.x + player.size.x > left &&
-        player.position.y < bottom &&
-        player.position.y + player.size.y > top
+      return aabb(player, x - p, x + w + p, y, y + h + p);
+    }
+
+    if (obstacle.type === GameObjectType.OBSTACLE_SAW) {
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const r = Math.min(w, h) * 0.38;
+      const closestX = Math.max(player.position.x, Math.min(cx, player.position.x + player.size.x));
+      const closestY = Math.max(player.position.y, Math.min(cy, player.position.y + player.size.y));
+      const dx = cx - closestX;
+      const dy = cy - closestY;
+      return dx * dx + dy * dy < r * r;
+    }
+
+    if (obstacle.type === GameObjectType.OBSTACLE_HANGING) {
+      return aabb(
+        player,
+        x + SPIKE_INSET_SIDES,
+        x + w - SPIKE_INSET_SIDES,
+        y + 2,
+        y + h - SPIKE_INSET_TOP,
       );
     }
-    const left = obstacle.position.x + SPIKE_INSET_SIDES;
-    const right = obstacle.position.x + obstacle.size.x - SPIKE_INSET_SIDES;
-    const top = obstacle.position.y + SPIKE_INSET_TOP;
-    const bottom = obstacle.position.y + obstacle.size.y - SPIKE_INSET_BOTTOM;
-    if (left >= right || top >= bottom) {
-      return false;
+
+    if (obstacle.type === GameObjectType.OBSTACLE_DIAMOND) {
+      return aabb(player, x + 7, x + w - 7, y + 8, y + h - 8);
     }
-    return (
-      player.position.x < right &&
-      player.position.x + player.size.x > left &&
-      player.position.y < bottom &&
-      player.position.y + player.size.y > top
+
+    return aabb(
+      player,
+      x + SPIKE_INSET_SIDES,
+      x + w - SPIKE_INSET_SIDES,
+      y + SPIKE_INSET_TOP,
+      y + h - SPIKE_INSET_BOTTOM,
     );
   }
 
@@ -85,10 +115,7 @@ export class CollisionDetection {
   static findCollisions(obj: GameObject, objects: GameObject[]): GameObject[] {
     return objects.filter((other) => {
       if (other.id === obj.id || !other.active) return false;
-      if (
-        other.type === GameObjectType.OBSTACLE_SPIKE ||
-        other.type === GameObjectType.OBSTACLE_BLOCK
-      ) {
+      if (isObstacleType(other.type)) {
         return this.checkObstacleCollision(obj, other);
       }
       return this.checkAABBCollision(obj, other);

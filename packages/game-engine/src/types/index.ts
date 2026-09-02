@@ -18,9 +18,16 @@ export enum GameObjectType {
   PLAYER = 'player',
   OBSTACLE_SPIKE = 'obstacle_spike',
   OBSTACLE_BLOCK = 'obstacle_block',
+  OBSTACLE_SAW = 'obstacle_saw',
+  OBSTACLE_DIAMOND = 'obstacle_diamond',
+  OBSTACLE_HANGING = 'obstacle_hanging',
   PLATFORM = 'platform',
   PORTAL = 'portal',
   COLLECTIBLE = 'collectible',
+}
+
+export function isObstacleType(type: GameObjectType): boolean {
+  return type.startsWith('obstacle_');
 }
 
 export interface Player extends GameObject {

@@ -181,7 +181,9 @@ export class GameEngine {
 
     // Update player physics
     const levelPlatforms = this.gameState.gameObjects.filter(
-      (obj) => obj.type === GameObjectType.PLATFORM && obj.active
+      (obj) =>
+        (obj.type === GameObjectType.PLATFORM || obj.type === GameObjectType.OBSTACLE_BLOCK) &&
+        obj.active
     );
 
     // Permanent safety floor - prevents falling through (never unloaded, spans entire level)

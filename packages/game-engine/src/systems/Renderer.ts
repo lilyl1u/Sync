@@ -211,7 +211,10 @@ export class Renderer {
       switch (obj.type) {
         case GameObjectType.OBSTACLE_SPIKE:
         case GameObjectType.OBSTACLE_BLOCK:
-          this.drawObstacle(obj as Obstacle, cameraOffset);
+        case GameObjectType.OBSTACLE_SAW:
+        case GameObjectType.OBSTACLE_DIAMOND:
+        case GameObjectType.OBSTACLE_HANGING:
+          this.drawObstacle(obj as Obstacle, cameraOffset, gameState.elapsedTime);
           break;
         case GameObjectType.PLATFORM:
           this.drawPlatform(obj as Platform, cameraOffset);
@@ -292,14 +295,26 @@ export class Renderer {
     }
   }
 
-  private drawObstacle(obstacle: Obstacle, cameraOffset: number): void {
+  private drawObstacle(obstacle: Obstacle, cameraOffset: number, elapsed: number): void {
     const screenX = obstacle.position.x - cameraOffset;
     const screenY = obstacle.position.y;
     this.ctx.save();
-    if (obstacle.type === GameObjectType.OBSTACLE_SPIKE) {
-      this.drawSpike(screenX, screenY, obstacle.size);
-    } else {
-      this.drawBlock(screenX, screenY, obstacle.size);
+    switch (obstacle.type) {
+      case GameObjectType.OBSTACLE_SPIKE:
+        this.drawSpike(screenX, screenY, obstacle.size);
+        break;
+      case GameObjectType.OBSTACLE_SAW:
+        this.drawSaw(screenX, screenY, obstacle.size, elapsed);
+        break;
+      case GameObjectType.OBSTACLE_DIAMOND:
+        this.drawDiamond(screenX, screenY, obstacle.size);
+        break;
+      case GameObjectType.OBSTACLE_HANGING:
+        this.drawHanging(screenX, screenY, obstacle.size);
+        break;
+      default:
+        this.drawBlock(screenX, screenY, obstacle.size);
+        break;
     }
     this.ctx.restore();
   }
@@ -323,6 +338,69 @@ export class Renderer {
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
 
+    this.ctx.shadowBlur = 0;
+  }
+
+  private drawSaw(x: number, y: number, size: Vector2D, elapsed: number): void {
+    const cx = x + size.x / 2;
+    const cy = y + size.y / 2;
+    const r = Math.min(size.x, size.y) / 2;
+    this.ctx.translate(cx, cy);
+    this.ctx.rotate(elapsed * 7);
+    this.ctx.shadowBlur = 12;
+    this.ctx.shadowColor = this.colors.obstacleGlow;
+    this.ctx.fillStyle = this.colors.obstacle;
+    this.ctx.beginPath();
+    const teeth = 8;
+    for (let i = 0; i < teeth; i++) {
+      const a0 = (i / teeth) * Math.PI * 2;
+      const a1 = ((i + 0.5) / teeth) * Math.PI * 2;
+      const a2 = ((i + 1) / teeth) * Math.PI * 2;
+      this.ctx.lineTo(Math.cos(a0) * r * 0.62, Math.sin(a0) * r * 0.62);
+      this.ctx.lineTo(Math.cos(a1) * r, Math.sin(a1) * r);
+      this.ctx.lineTo(Math.cos(a2) * r * 0.62, Math.sin(a2) * r * 0.62);
+    }
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.fillStyle = '#3a1020';
+    this.ctx.beginPath();
+    this.ctx.arc(0, 0, r * 0.28, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.shadowBlur = 0;
+  }
+
+  private drawDiamond(x: number, y: number, size: Vector2D): void {
+    this.ctx.shadowBlur = 14;
+    this.ctx.shadowColor = this.colors.obstacleGlow;
+    this.ctx.fillStyle = this.colors.obstacle;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x + size.x / 2, y);
+    this.ctx.lineTo(x + size.x, y + size.y / 2);
+    this.ctx.lineTo(x + size.x / 2, y + size.y);
+    this.ctx.lineTo(x, y + size.y / 2);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.strokeStyle = '#ff3399';
+    this.ctx.lineWidth = 2;
+    this.ctx.stroke();
+    this.ctx.shadowBlur = 0;
+  }
+
+  private drawHanging(x: number, y: number, size: Vector2D): void {
+    this.ctx.shadowBlur = 12;
+    this.ctx.shadowColor = this.colors.obstacleGlow;
+    this.ctx.fillStyle = '#4c1d95';
+    this.ctx.fillRect(x + size.x / 2 - 4, y, 8, 10);
+    this.ctx.fillStyle = this.colors.obstacle;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y + 8);
+    this.ctx.lineTo(x + size.x, y + 8);
+    this.ctx.lineTo(x + size.x / 2, y + size.y);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.strokeStyle = '#ff3399';
+    this.ctx.lineWidth = 2;
+    this.ctx.stroke();
     this.ctx.shadowBlur = 0;
   }
 

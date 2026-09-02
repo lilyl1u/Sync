@@ -200,23 +200,30 @@ export class PhysicsEngine {
   handlePlayerCollision(player: Player, collidedObject: GameObject): boolean {
     switch (collidedObject.type) {
       case GameObjectType.OBSTACLE_SPIKE:
+      case GameObjectType.OBSTACLE_SAW:
+      case GameObjectType.OBSTACLE_DIAMOND:
+      case GameObjectType.OBSTACLE_HANGING:
         player.health = 0;
         return true;
 
-      case GameObjectType.OBSTACLE_BLOCK:
-        // Landing on top of a block is safe - treat like a platform
+      case GameObjectType.OBSTACLE_BLOCK: {
         const playerBottom = player.position.y + player.size.y;
         const blockTop = collidedObject.position.y;
-        const landingTolerance = 18; // Forgiving window for landing
+        const landingTolerance = 18;
         const isLandingOnTop =
           playerBottom >= blockTop - 4 &&
           playerBottom <= blockTop + landingTolerance &&
-          player.velocity.y >= -150; // Falling or just landed (allow slight upward at peak)
+          player.velocity.y >= -150;
         if (isLandingOnTop) {
-          return false; // Not fatal - physics will snap player on top
+          player.position.y = blockTop - player.size.y;
+          player.velocity.y = 0;
+          player.isOnGround = true;
+          player.isJumping = false;
+          return false;
         }
         player.health = 0;
         return true;
+      }
 
       case GameObjectType.PLATFORM:
         // Platform collision handled in updatePlayer

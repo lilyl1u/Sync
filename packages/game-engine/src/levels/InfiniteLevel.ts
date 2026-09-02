@@ -1,8 +1,9 @@
 /**
  * Infinite Level - Procedurally generates content as the player progresses
- * Solid continuous floor, red spikes only.
+ * Solid continuous floor with mixed hazard types.
  */
-import { Level, LevelSegment, GameObject, GameObjectType, Platform, Obstacle } from '../types';
+import { Level, LevelSegment, GameObjectType, Platform, Obstacle } from '../types';
+import { makeHazard, pickHazardKind, type HazardKind } from './BeatLevel';
 
 const GROUND_Y = 500;
 const CHUNK_SIZE = 800;
@@ -21,24 +22,19 @@ const RAMP_DISTANCE = 8000;
 function generateChunkObstacles(startX: number, length: number, seed: number): Obstacle[] {
   const obstacles: Obstacle[] = [];
   const rng = seededRandom(seed);
-  // Start easy (generous spacing), ramp to hard (tighter spacing) as distance increases
   const progress = Math.min(1, startX / RAMP_DISTANCE);
-  const minSpacing = Math.max(120, 320 - progress * 170);  // 320 -> 150
-  const maxSpacing = Math.max(200, 520 - progress * 220);  // 520 -> 300
+  const minSpacing = Math.max(120, 320 - progress * 170);
+  const maxSpacing = Math.max(200, 520 - progress * 220);
 
   let x = startX + 80;
+  let lastKind: HazardKind | null = null;
   while (x < startX + length - 100) {
     const spacing = minSpacing + rng() * (maxSpacing - minSpacing);
-    obstacles.push({
-      id: `inf-spike-${startX}-${x}`,
-      position: { x, y: GROUND_Y - 30 },
-      velocity: { x: 0, y: 0 },
-      size: { x: 30, y: 30 },
-      type: GameObjectType.OBSTACLE_SPIKE,
-      active: true,
-      damage: 1,
-    });
-    x += spacing + 30;
+    const kind = pickHazardKind(rng, x / 300, lastKind);
+    obstacles.push(makeHazard(`inf-${kind}-${startX}-${Math.round(x)}`, x, kind));
+    lastKind = kind;
+    const extra = kind === 'hanging' || kind === 'block' ? 50 : 30;
+    x += spacing + extra;
   }
   return obstacles;
 }
@@ -57,30 +53,21 @@ export function createInfiniteLevel(): Level {
     width: FLOOR_EXTENSION,
   });
 
-  const easySpikes = [500, 950, 1450, 2000];
-  easySpikes.forEach((x, i) => {
-    obstacles.push({
-      id: `easy-spike-${i}`,
-      position: { x, y: GROUND_Y - 30 },
-      velocity: { x: 0, y: 0 },
-      size: { x: 30, y: 30 },
-      type: GameObjectType.OBSTACLE_SPIKE,
-      active: true,
-      damage: 1,
-    });
-  });
-
-  const mediumSpikes = [1100, 1700, 2400, 3100, 3800, 4500, 5200, 5900, 6600];
-  mediumSpikes.forEach((x, i) => {
-    obstacles.push({
-      id: `medium-spike-${i}`,
-      position: { x, y: GROUND_Y - 30 },
-      velocity: { x: 0, y: 0 },
-      size: { x: 30, y: 30 },
-      type: GameObjectType.OBSTACLE_SPIKE,
-      active: true,
-      damage: 1,
-    });
+  const intro: Array<{ x: number; kind: HazardKind }> = [
+    { x: 500, kind: 'spike' },
+    { x: 950, kind: 'spike' },
+    { x: 1450, kind: 'saw' },
+    { x: 2000, kind: 'diamond' },
+    { x: 2400, kind: 'block' },
+    { x: 3100, kind: 'hanging' },
+    { x: 3800, kind: 'saw' },
+    { x: 4500, kind: 'spike' },
+    { x: 5200, kind: 'diamond' },
+    { x: 5900, kind: 'block' },
+    { x: 6600, kind: 'hanging' },
+  ];
+  intro.forEach(({ x, kind }, i) => {
+    obstacles.push(makeHazard(`intro-${kind}-${i}`, x, kind));
   });
 
   const allObjects = [...platforms, ...obstacles];
