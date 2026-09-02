@@ -7,7 +7,6 @@ import styles from "./Navbar.module.css";
 const NAV_LINKS = [
   { label: "Play", href: "/game" },
   { label: "Duels", href: "/duels" },
-  { label: "Lo-fi", href: "/lofi" },
 ];
 
 export function Navbar() {

@@ -30,9 +30,6 @@ export function Hero() {
             </Link>
           </div>
         </div>
-        <p className="px-kicker" style={{ color: "var(--px-gold)", letterSpacing: "0.12em" }}>
-          Built at HackIllinois
-        </p>
       </div>
     </section>
   );
