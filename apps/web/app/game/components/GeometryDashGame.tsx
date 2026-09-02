@@ -215,7 +215,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
   const hasStartedRef = useRef(false);
   const [audioLoaded, setAudioLoaded] = useState(false);
   const [audioError, setAudioError] = useState(false);
-  const [loadingAudio, setLoadingAudio] = useState(true);
+  const [loadingAudio, setLoadingAudio] = useState(false);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [walletProviderName, setWalletProviderName] = useState<'phantom' | 'privy' | null>(null);
   const [isWalletConnecting, setIsWalletConnecting] = useState(false);
