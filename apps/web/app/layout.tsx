@@ -13,6 +13,9 @@ const pixel = Press_Start_2P({
 export const metadata: Metadata = {
   title: "Sync — Jump · Land · Survive",
   description: "Arcade rhythm runner. AI music, verifiable terrain, survive to earn.",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({
