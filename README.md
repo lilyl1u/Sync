@@ -1,157 +1,67 @@
-# 🎵 Sync
+# Sync
 
-**Beat-synced endless platformer on Solana** : stake SOL, play solo or 1v1 duels, and run to AI-generated music.
+Endless platformer on Solana. Jump to the beat, stake SOL, play solo or 1v1.
 
-> Built at HackIllinois · [Devpost](https://devpost.com/software/sync-mdn04e?ref_content=my-projects-tab&ref_feature=my_projects)
+[Devpost](https://devpost.com/software/sync-mdn04e)
 
----
+## What it is
 
-## Overview
+- **Beat-synced run** — obstacles land on the music timeline
+- **AI soundtrack** — LSTM on Modal, played in-browser with Tone.js
+- **Fair worlds** — ORAO VRF seed so the same seed → the same course
+- **Optional SOL** — solo stake or pooled 1v1; Anchor handles escrow
+- **Custom engine** — TypeScript (no Unity/Phaser)
 
-Sync is an endless platformer where terrain is generated in sync with the beat of AI-composed music. Players can stake SOL to enter solo runs or competitive 1v1 duels, with on-chain verifiable randomness (ORAO VRF) ensuring fair terrain generation. Music is produced in real time by an LSTM model served via Modal.
+Play in the browser with no wallet. Staking needs Phantom (or Privy in `apps/web/.env.local`).
 
-### Key Features
+## Run it
 
-- **Beat-synced gameplay** — Platforms and obstacles spawn on the beat of dynamically generated music, creating a rhythm-game feel in a platformer format.
-- **AI-generated music** — An LSTM neural network generates original tracks in real time, served through a Modal-hosted API endpoint.
-- **Solana staking & duels** — Players can stake SOL to enter games. A 1v1 duel mode lets players compete head-to-head with pooled stakes. Built with Anchor.
-- **Verifiable randomness (ORAO VRF)** — Terrain generation uses ORAO's on-chain VRF so that game worlds are provably fair and reproducible from a given seed.
-- **Custom TypeScript game engine** — The platformer runs on a purpose-built engine (no Unity/Phaser), giving full control over rendering, physics, and beat-sync timing.
-- **Wallet auth via Privy** — Seamless wallet connection and authentication without requiring users to install browser extensions.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js, React, TypeScript |
-| Game Engine | Custom TypeScript engine |
-| Audio | Tone.js |
-| Blockchain | Solana, Anchor |
-| Auth | Privy |
-| ML / Music Gen | LSTM model served on Modal |
-| Randomness | ORAO VRF |
-| Database | Firebase |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js (v18+)
-- npm or yarn
-- A Solana wallet (for staking features)
-- Solana CLI + Anchor CLI (only if deploying the on-chain program)
-
-### Installation
+Needs **Node 20.9+**.
 
 ```bash
-git clone https://github.com/michellee-wang/sync.git
-cd sync
+git clone https://github.com/lilyl1u/Sync.git
+cd Sync
 npm install
-```
-
-### Running the App
-
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to play.
+Open [http://localhost:3000](http://localhost:3000).
 
-> **Note:** The game is playable without a wallet. Staking and email login need `NEXT_PUBLIC_PRIVY_APP_ID` in `apps/web/.env.local` (see `apps/web/.env.example`) or Phantom.
-
----
-
-## Solana & Gambling Setup
-
-To deploy the Anchor program and initialize the staking pool:
-
-```bash
-npm run setup:gambling
-```
-
-This requires the Solana CLI and Anchor CLI to be installed and configured. See [`packages/solana/README.md`](packages/solana/README.md#setup-anchor-no-house-keypair) for detailed setup instructions including keypair configuration and pool initialization.
-
----
-
-## Project Structure
-
-```
-sync/
-├── apps/web/                 # Next.js frontend
-├── packages/
-│   ├── game-engine/          # TypeScript engine (rendering, physics, beat-sync)
-│   ├── solana/               # Anchor program for staking, duels, pool
-│   ├── shared-types/
-│   └── spotify/              # TypeScript Spotify client
-├── services/ml/
-│   ├── lofi/                 # LSTM music gen (Modal) — used by the game
-│   └── edm/                  # EDM remix, MIDI matching, Spotify features
-└── package.json
-```
-
----
-
-## How It Works
-
-### Music Generation
-
-An LSTM model trained on MIDI data generates melodic sequences (`services/ml/lofi`). The model is hosted as a serverless endpoint on [Modal](https://modal.com), which the frontend calls to get note sequences. [Tone.js](https://tonejs.github.io/) synthesizes the audio in the browser and provides precise beat timing events.
-
-See [`services/ml/README.md`](services/ml/README.md) to train or deploy the music backends.
-
-### Terrain Generation
-
-When a game starts, a seed is obtained from ORAO VRF on Solana. This seed deterministically generates the terrain layout, meaning any two players with the same seed will get the same world. Platforms, gaps, and obstacles are placed in sync with the beat timeline from the music generator, so the gameplay has a rhythmic quality.
-
-### Staking & Duels
-
-Players can optionally stake SOL before starting a run. In **solo mode**, the stake acts as a commitment to the run. In **1v1 duel mode**, two players' stakes are pooled, and the player who survives longest (or scores highest) takes the pool. The Anchor smart contract manages escrow, pool creation, and payout logic.
-
----
-
-## Commands
-
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `npm run dev` | Start the development server |
-| `npm run build` | Build all workspaces |
-| `npm run setup:gambling` | Deploy Anchor program + initialize the staking pool |
+| `npm run dev` | Dev server |
+| `npm run build` | Build workspaces |
+| `npm run setup:gambling` | Deploy Anchor program + staking pool |
 
----
+On-chain setup: Solana CLI + Anchor CLI. Details in [`packages/solana/README.md`](packages/solana/README.md).
 
-## Architecture Diagram
+## Repo
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
-│   Next.js    │────▶│  Modal API   │────▶│   LSTM Model     │
-│   Frontend   │◀────│  (Serverless)│◀────│   (Music Gen)    │
-└──────┬───────┘     └──────────────┘     └──────────────────┘
-       │
-       │  Tone.js (audio)
-       │  Custom Engine (rendering + physics)
-       │
-       ▼
-┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
-│    Privy     │────▶│   Solana     │────▶│  ORAO VRF        │
-│   (Auth)     │     │  (Anchor)    │     │  (Randomness)    │
-└──────────────┘     └──────────────┘     └──────────────────┘
-                           │
-                           ▼
-                     ┌──────────────┐
-                     │   Firebase   │
-                     │  (Scores/DB) │
-                     └──────────────┘
+apps/web/              Next.js
+packages/game-engine/  render, physics, beat-sync
+packages/solana/       staking, duels, pool
+packages/shared-types
+packages/spotify/
+services/ml/lofi/      LSTM used in-game (Modal)
+services/ml/edm/       EDM / Spotify pipeline
 ```
 
----
+Train or deploy music: [`services/ml/README.md`](services/ml/README.md).
 
-## Contributing
+## How a run works
 
-This project was built during HackIllinois. Contributions, issues, and forks are welcome.
+1. Frontend asks Modal for a MIDI clip; Tone.js plays it and exposes beats.
+2. A VRF seed (or local seed) builds the course; hazards sit on that beat grid.
+3. Solo is a timed run. Duels pool both stakes; longest survival wins. Scores live in Firebase.
+
+```
+Next.js ──► Modal LSTM ──► MIDI / beats
+   │
+   ├── Tone.js + game engine (play + course)
+   ├── Privy / Phantom → Solana (Anchor) → ORAO VRF
+   └── Firebase (scores, duels)
+```
 
 ## License
 
