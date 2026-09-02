@@ -11,11 +11,7 @@ export default async function GamePage({
   return (
     <main className="page-arcade min-h-screen flex flex-col items-center justify-center p-4 sm:p-8 pt-24">
       <div className="w-full max-w-7xl flex flex-col items-center gap-4">
-        <Link
-          href="/"
-          className="self-start text-sm font-medium opacity-90 hover:opacity-100 transition-opacity"
-          style={{ color: 'var(--arcade-cyan)' }}
-        >
+        <Link href="/" className="self-start px-kicker">
           ← Back
         </Link>
         <GeometryDashGame

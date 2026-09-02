@@ -6,26 +6,33 @@ export function Hero() {
   return (
     <section className={styles.hero}>
       <div className={styles.dotGrid} />
+      <span className={`${styles.cloud} ${styles.cloudA}`} aria-hidden />
+      <span className={`${styles.cloud} ${styles.cloudB}`} aria-hidden />
+      <span className="px-star" style={{ top: "22%", left: "42%" }} aria-hidden />
+      <span className="px-star" style={{ top: "34%", right: "28%" }} aria-hidden />
       <LevelStrip />
       <div className={styles.content}>
-        <p className={styles.impact}>Jump · Land · Survive</p>
+        <p className="px-kicker">Jump · Land · Survive</p>
         <div className={styles.titleWrap} tabIndex={0}>
-          <h1 className={styles.title}>Sync</h1>
+          <h1 className={styles.title}>SYNC</h1>
         </div>
         <p className={styles.subtitle}>
-          A fast-paced dash through spikes and blocks, synced to the beat. One
-          tap to jump, one mistake to restart.
+          A dash through spikes and blocks, locked to the beat. One jump. One
+          mistake. Start over.
         </p>
         <div className={styles.buttons}>
           <div className={styles.billboard}>
-            <Link href="/game" className={styles.playBtn}>
-              PLAY NOW
+            <Link href="/game" className="px-btn px-btn-start px-blink">
+              Press Start
             </Link>
-            <Link href="/duels" className={styles.duelsBtn}>
+            <Link href="/duels" className="px-btn px-btn-sea">
               Duels 1v1
             </Link>
           </div>
         </div>
+        <p className="px-kicker" style={{ color: "var(--px-gold)", letterSpacing: "0.12em" }}>
+          Built at HackIllinois
+        </p>
       </div>
     </section>
   );

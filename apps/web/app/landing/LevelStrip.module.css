@@ -3,11 +3,9 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: 72px;
+  height: 88px;
   z-index: 2;
   pointer-events: none;
-  mask-image: linear-gradient(to top, black 0%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to top, black 0%, transparent 100%);
 }
 
 .track {
@@ -19,10 +17,15 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 0;
   height: 100%;
-  padding: 0 1rem;
+  padding: 0 1rem 8px;
   box-sizing: border-box;
+  border-top: 4px solid var(--px-ink);
+  background: repeating-linear-gradient(
+    90deg,
+    var(--px-sea) 0 16px,
+    #2468b8 16px 32px
+  );
 }
 
 .repeat {
@@ -30,28 +33,23 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .spike {
   width: 0;
   height: 0;
-  border-left: 12px solid transparent;
-  border-right: 12px solid transparent;
-  border-bottom: 36px solid var(--arcade-magenta);
-  filter: drop-shadow(0 0 6px rgba(255, 0, 255, 0.5));
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-bottom: 28px solid var(--px-pink);
   flex-shrink: 0;
-  opacity: 0.9;
 }
 
 .block {
-  width: 24px;
-  height: 32px;
-  background: linear-gradient(180deg, var(--arcade-cyan) 0%, rgba(0, 255, 255, 0.6) 100%);
-  border: 1px solid rgba(0, 255, 255, 0.5);
-  box-shadow: 0 0 10px rgba(0, 255, 255, 0.25);
+  width: 20px;
+  height: 28px;
+  background: var(--px-gold);
+  border: 3px solid var(--px-ink);
   flex-shrink: 0;
-  opacity: 0.9;
 }
-

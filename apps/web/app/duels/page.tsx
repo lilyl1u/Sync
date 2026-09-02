@@ -213,57 +213,40 @@ export default function DuelsPage() {
   const isInLobby = lobbyState.type === 'in_lobby';
   const isBusy = lobbyState.type === 'creating' || lobbyState.type === 'joining';
 
-  const cardClass =
-    'w-full max-w-md rounded-2xl border border-[var(--arcade-border)] border-t-2 border-t-[var(--arcade-cyan)] p-8 shadow-[var(--arcade-glow-cyan)] bg-[var(--arcade-glass)] backdrop-blur-xl';
-  const inputClass =
-    'w-full px-4 py-3 bg-black/40 border border-[rgba(0,255,255,0.25)] rounded-lg text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[var(--arcade-cyan)] focus:border-[var(--arcade-cyan)]';
-  const btnPrimary =
-    'w-full py-4 text-black font-bold rounded-lg transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] bg-[linear-gradient(135deg,var(--arcade-cyan),#00cccc)] hover:shadow-[0_0_24px_rgba(0,255,255,0.4)]';
-  const tabActive =
-    'bg-[linear-gradient(135deg,var(--arcade-cyan),#00cccc)] text-black shadow-[0_0_16px_rgba(0,255,255,0.35)]';
-  const tabInactive =
-    'text-[rgba(255,255,255,0.7)] hover:text-white hover:bg-white/5';
+  const cardClass = 'px-panel w-full max-w-md p-8';
+  const inputClass = 'px-input';
+  const btnPrimary = 'px-btn px-btn-start w-full';
+  const tabActive = 'px-btn px-btn-start';
+  const tabInactive = 'px-btn';
 
   return (
     <div className="page-arcade min-h-screen relative overflow-hidden">
       <div className="min-h-screen flex flex-col items-center justify-center px-6 py-16 pt-24">
-        <Link
-          href="/"
-          className="absolute top-20 left-6 text-sm font-medium transition-opacity hover:opacity-100 opacity-90"
-          style={{ color: 'var(--arcade-cyan)' }}
-        >
+        <Link href="/" className="absolute top-20 left-6 px-kicker">
           ← Home
         </Link>
 
         <div className="mb-10 text-center">
-          <h1
-            className="text-5xl lg:text-6xl font-bold mb-2 font-[family-name:var(--font-display)]"
-            style={{
-              background: 'linear-gradient(90deg, var(--arcade-cyan), var(--arcade-magenta))',
-              WebkitBackgroundClip: 'text',
-              backgroundClip: 'text',
-              color: 'transparent',
-            }}
-          >
-            Duels
-          </h1>
-          <p className="text-white/80 text-sm">1v1 · Winner takes the pot</p>
+          <h1 className="px-title text-3xl sm:text-4xl mb-3">DUELS</h1>
+          <p className="px-kicker" style={{ color: 'var(--px-gold)' }}>
+            1v1 · Winner takes the pot
+          </p>
         </div>
 
         {!isInLobby && !isBusy ? (
           <>
-            <div className="flex gap-2 mb-8 p-1 rounded-xl border border-[var(--arcade-border)] bg-black/30 backdrop-blur-sm">
+            <div className="flex gap-2 mb-8">
               <button
                 type="button"
                 onClick={() => setActiveTab('create')}
-                className={`px-6 py-2.5 rounded-lg font-bold transition-all ${activeTab === 'create' ? tabActive : tabInactive}`}
+                className={activeTab === 'create' ? tabActive : tabInactive}
               >
                 Create Lobby
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('join')}
-                className={`px-6 py-2.5 rounded-lg font-bold transition-all ${activeTab === 'join' ? tabActive : tabInactive}`}
+                className={activeTab === 'join' ? tabActive : tabInactive}
               >
                 Join Lobby
               </button>
@@ -271,71 +254,71 @@ export default function DuelsPage() {
 
             {activeTab === 'create' && (
               <form onSubmit={(e) => { void handleCreateLobby(e); }} className={`relative z-20 ${cardClass}`}>
-                <h2 className="text-xl font-bold text-white mb-2 font-[family-name:var(--font-display)]">Create a duel lobby</h2>
-                <p className="text-sm mb-6" style={{ color: 'var(--arcade-cyan)' }}>Set your bet and share the code with your opponent.</p>
+                <h2 className="text-sm mb-2">Create a duel lobby</h2>
+                <p className="text-[10px] mb-6">Set your bet and share the code with your opponent.</p>
                 <label className="block mb-4">
-                  <span className="text-white/80 text-sm mb-2 block">Bet amount (SOL)</span>
+                  <span className="text-[10px] mb-2 block">Bet amount (SOL)</span>
                   <input type="text" autoComplete="off" value={createBet} onChange={(e) => setCreateBet(e.target.value)} placeholder="e.g. 0.005" className={inputClass} />
                 </label>
-                {createError && <p className="mb-4 text-red-400 text-sm">{createError}</p>}
+                {createError && <p className="mb-4 text-[10px] text-[#b42318]">{createError}</p>}
                 <button type="submit" className={btnPrimary}>Create Lobby</button>
               </form>
             )}
 
             {activeTab === 'join' && (
               <form onSubmit={(e) => { void handleJoinLobby(e); }} className={`relative z-20 ${cardClass}`}>
-                <h2 className="text-xl font-bold text-white mb-2 font-[family-name:var(--font-display)]">Join a duel</h2>
-                <p className="text-sm mb-6" style={{ color: 'var(--arcade-cyan)' }}>Enter the lobby code. Bet is set by the host.</p>
+                <h2 className="text-sm mb-2">Join a duel</h2>
+                <p className="text-[10px] mb-6">Enter the lobby code. Bet is set by the host.</p>
                 <label className="block mb-4">
-                  <span className="text-white/80 text-sm mb-2 block">Lobby code</span>
+                  <span className="text-[10px] mb-2 block">Lobby code</span>
                   <input type="text" autoComplete="off" value={joinCode} onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setJoinError(null); }} placeholder="e.g. ABC123" maxLength={6} className={`${inputClass} uppercase tracking-widest text-center text-lg`} />
                 </label>
-                {joinError && <p className="mb-4 text-red-400 text-sm">{joinError}</p>}
+                {joinError && <p className="mb-4 text-[10px] text-[#b42318]">{joinError}</p>}
                 <button type="submit" className={btnPrimary}>Join Lobby</button>
               </form>
             )}
           </>
         ) : isBusy ? (
           <div className={`${cardClass} text-center`}>
-            <p className="animate-pulse text-lg" style={{ color: 'var(--arcade-cyan)' }}>
+            <p className="px-blink text-sm">
               {lobbyState.type === 'creating' ? 'Creating lobby...' : 'Joining lobby...'}
             </p>
           </div>
         ) : lobbyState.type === 'in_lobby' ? (
           <div className={cardClass}>
             <div className="text-center">
-              <h2 className="text-xl font-bold text-white mb-1 font-[family-name:var(--font-display)]">
+              <h2 className="text-sm mb-2">
                 {lobbyState.playerCount < 2 ? 'Waiting for opponent...' : 'Ready to duel!'}
               </h2>
-              <p className="text-sm mb-6" style={{ color: 'var(--arcade-cyan)' }}>
+              <p className="text-[10px] mb-6">
                 {lobbyState.playerCount < 2 ? 'Share the code below with your opponent.' : 'Both players are in. Start the game!'}
               </p>
               <div className="mb-6">
-                <span className="text-xs uppercase tracking-wider block mb-2" style={{ color: 'var(--arcade-cyan)' }}>Lobby code</span>
+                <span className="text-[10px] uppercase block mb-2">Lobby code</span>
                 <div className="flex items-center justify-center gap-3">
-                  <span className="text-4xl font-bold tracking-[0.2em]" style={{ background: 'linear-gradient(90deg, var(--arcade-cyan), var(--arcade-magenta))', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>{lobbyState.code}</span>
-                  <button type="button" onClick={handleCopyCode} className="px-3 py-1.5 text-xs font-bold text-white rounded-lg transition-colors bg-[rgba(0,255,255,0.2)] border border-[var(--arcade-cyan)] hover:bg-[rgba(0,255,255,0.3)]">Copy</button>
+                  <span className="px-title text-2xl tracking-widest">{lobbyState.code}</span>
+                  <button type="button" onClick={handleCopyCode} className="px-btn px-btn-gold">Copy</button>
                 </div>
               </div>
-              <div className="space-y-2 mb-8 text-left bg-black/30 rounded-xl p-4 border border-[var(--arcade-border)]">
-                <div className="flex justify-between text-sm">
-                  <span style={{ color: 'var(--arcade-cyan)' }}>Bet</span>
-                  <span className="text-white">{formatLamportsToSol(BigInt(lobbyState.bet))} SOL</span>
+              <div className="space-y-2 mb-8 text-left px-hud p-4 text-[10px]">
+                <div className="flex justify-between">
+                  <span>Bet</span>
+                  <span>{formatLamportsToSol(BigInt(lobbyState.bet))} SOL</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span style={{ color: 'var(--arcade-cyan)' }}>Players</span>
-                  <span className="text-white">{lobbyState.playerCount}/2</span>
+                <div className="flex justify-between">
+                  <span>Players</span>
+                  <span>{lobbyState.playerCount}/2</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span style={{ color: 'var(--arcade-cyan)' }}>Role</span>
-                  <span className="text-white capitalize">{lobbyState.role}</span>
+                <div className="flex justify-between">
+                  <span>Role</span>
+                  <span className="capitalize">{lobbyState.role}</span>
                 </div>
               </div>
               <div className="flex flex-col gap-3">
-                <Link href={`/game?duel=${lobbyState.code}&role=${lobbyState.role}`} className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-black font-bold rounded-lg text-center transition-all shadow-lg hover:shadow-green-500/40 active:scale-[0.98]">
-                  {lobbyState.playerCount === 2 ? 'Enter Arena' : 'Enter Arena (waiting for opponent)'}
+                <Link href={`/game?duel=${lobbyState.code}&role=${lobbyState.role}`} className="px-btn px-btn-start w-full">
+                  {lobbyState.playerCount === 2 ? 'Enter Arena' : 'Enter Arena (waiting)'}
                 </Link>
-                <button type="button" onClick={() => { void handleLeaveLobby(); }} className="w-full py-3 border-2 border-white/40 text-white font-bold rounded-lg hover:border-[var(--arcade-cyan)] hover:bg-[rgba(0,255,255,0.08)] transition-all">
+                <button type="button" onClick={() => { void handleLeaveLobby(); }} className="px-btn w-full">
                   Leave lobby
                 </button>
               </div>

@@ -38,7 +38,7 @@ export function PrivyGlobalLogoutButton() {
         }
       }}
       disabled={isLoggingOut}
-      className="fixed top-4 right-4 z-[100] pointer-events-auto px-4 py-2 border border-cyan-300/70 bg-black/60 text-cyan-100 rounded-lg font-mono text-xs sm:text-sm hover:bg-cyan-500/20 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+      className="px-btn px-btn-sea fixed top-16 right-4 z-[100] pointer-events-auto"
       aria-label="Log out from Privy"
     >
       {isLoggingOut ? 'Logging out...' : 'Log out Privy'}

@@ -229,29 +229,24 @@ export default function LofiPage() {
     }
   }, [state.midiBase64, handleStop, startBgMp4]);
 
-  const cardClass = 'w-full max-w-[520px] rounded-xl border border-[var(--arcade-border)] border-t-2 border-t-[var(--arcade-cyan)] p-6 bg-[var(--arcade-glass)] backdrop-blur-xl';
-  const btnClass = 'px-4 py-2 rounded-lg text-sm font-medium border border-[var(--arcade-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--arcade-cyan)] hover:bg-[rgba(0,255,255,0.25)] disabled:opacity-60 disabled:cursor-not-allowed transition-colors';
+  const cardClass = 'px-panel w-full max-w-[520px] p-6';
+  const btnClass = 'px-btn px-btn-sea';
 
   return (
     <div className="page-arcade min-h-screen flex flex-col items-center py-8 px-4 pt-20">
       <audio ref={bgAudioRef} src={LOFI_BG_MP4} loop playsInline className="hidden" aria-hidden />
-      <Link href="/" className="self-start text-sm font-medium opacity-90 hover:opacity-100 mb-6" style={{ color: 'var(--arcade-cyan)' }}>
+      <Link href="/" className="self-start px-kicker mb-6">
         ← Home
       </Link>
-      <h1 className="text-3xl font-bold mb-1 font-[family-name:var(--font-display)]" style={{ background: 'linear-gradient(90deg, var(--arcade-cyan), var(--arcade-magenta))', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>
-        Lo-fi Hip-Hop Generator
-      </h1>
-      <p className="text-white/60 mb-8 text-sm">LSTM · Modal · Generate on load</p>
+      <h1 className="px-title text-xl sm:text-2xl mb-2 text-center">LO-FI</h1>
+      <p className="px-kicker mb-8" style={{ color: 'var(--px-gold)' }}>LSTM · Generate on load</p>
 
       <div className="w-full max-w-[520px] space-y-6">
         <div className={cardClass}>
-          <h2 className="text-lg font-semibold mb-4" style={{ color: 'var(--arcade-cyan)' }}>Generated Beat</h2>
+          <h2 className="text-sm mb-4">Generated Beat</h2>
           <div
-            className={`rounded-lg p-4 text-sm ${
-              state.status === 'info' ? 'bg-black/30 text-white/90 border border-[var(--arcade-border)]'
-                : state.status === 'ok' ? 'bg-black/20 text-white/95 border border-[rgba(0,255,255,0.15)]'
-                  : state.status === 'err' ? 'bg-red-950/30 text-red-300 border border-red-500/30'
-                    : 'bg-black/30 text-white/90 border border-[var(--arcade-border)]'
+            className={`p-4 text-[10px] border-3 border-[var(--px-ink)] ${
+              state.status === 'err' ? 'bg-[#ffd6d6]' : 'bg-white'
             }`}
           >
             {state.message}
@@ -266,23 +261,19 @@ export default function LofiPage() {
                     <a href={state.downloadUrl} download={state.fileName} className={`${btnClass} inline-block`}>Download MIDI</a>
                   )}
                 </div>
-                {playError && <p className="text-xs text-red-300 mt-2">Audio: {playError}</p>}
+                {playError && <p className="text-[10px] text-[#b42318] mt-2">Audio: {playError}</p>}
               </div>
             )}
           </div>
         </div>
 
-        <p className="text-center text-white/50 text-xs max-w-[520px] leading-relaxed">
-          Same API as the game: <code className="bg-black/40 px-1.5 py-0.5 rounded text-[0.78rem]" style={{ color: 'var(--arcade-cyan)' }}>POST /api/generate-lofi</code> is called automatically when this page loads.
+        <p className="text-center text-[9px] max-w-[520px] leading-relaxed text-[var(--px-navy)]">
+          Same API as the game: <code className="bg-white px-1 border-2 border-[var(--px-ink)]">POST /api/generate-lofi</code> runs when this page loads.
         </p>
 
         <div className="flex justify-center">
-          <Link
-            href="/game"
-            className="px-6 py-2.5 font-bold rounded-lg text-black transition-all shadow-lg active:scale-[0.98]"
-            style={{ background: 'linear-gradient(135deg, var(--arcade-cyan), #00cccc)', boxShadow: '0 0 20px rgba(0,255,255,0.35)' }}
-          >
-            Play game with this beat →
+          <Link href="/game" className="px-btn px-btn-start">
+            Play game →
           </Link>
         </div>
       </div>

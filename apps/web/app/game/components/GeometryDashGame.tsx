@@ -1278,7 +1278,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     <div
       ref={gameContainerRef}
       tabIndex={0}
-      className="relative w-full h-full flex items-center justify-center bg-gradient-to-b from-purple-950 to-purple-900 outline-none focus:outline-none"
+      className="relative w-full h-full flex items-center justify-center outline-none focus:outline-none"
       aria-label="Game"
     >
       <audio
@@ -1292,15 +1292,15 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       />
       {/* Duel countdown overlay */}
       {duelCountdown !== null && duelCountdown > 0 && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
-          <div className="text-9xl font-bold text-white animate-ping" style={{ animationDuration: '0.8s' }}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--px-navy)]/80">
+          <div className="px-title text-7xl">{duelCountdown}</div>
             {duelCountdown}
           </div>
         </div>
       )}
       {duelCountdown === 0 && (
         <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none animate-fade-in">
-          <div className="text-7xl font-bold text-emerald-400 animate-pulse">GO!</div>
+          <div className="px-title text-5xl px-blink">GO!</div>
         </div>
       )}
 
@@ -1309,7 +1309,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           ref={canvasRef}
           width={width}
           height={height}
-          className="border-4 border-purple-500 rounded-lg shadow-2xl shadow-purple-500/50"
+          className="border-4 border-[var(--px-ink)] shadow-[6px_6px_0_var(--px-ink)]"
         />
         {gameState && extractHoldProgress > 0 && !hasExtracted && !isGameOver && (
           <div
@@ -1320,10 +1320,10 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
               transform: 'translate(-50%, 0)',
             }}
           >
-            <div className="text-xs text-emerald-300 mb-1 text-center">Hold E to extract</div>
-            <div className="w-full h-2 bg-black/70 rounded overflow-hidden border border-emerald-400/30">
+            <div className="text-[10px] mb-1 text-center">Hold E to extract</div>
+            <div className="w-full h-3 bg-[var(--px-cream)] overflow-hidden border-2 border-[var(--px-ink)]">
               <div
-                className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-[width] duration-75"
+                className="h-full bg-[var(--px-gold)]"
                 style={{ width: `${Math.round(extractHoldProgress * 100)}%` }}
               />
             </div>
@@ -1333,47 +1333,46 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
 
       {/* Initial loader: single stable screen until audio is ready to avoid layout thrash */}
       {!hasStarted && loadingAudio && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10 bg-black/30 rounded-lg">
-          <div className="w-12 h-12 border-4 border-purple-400/50 border-t-purple-300 rounded-full animate-spin" aria-hidden />
-          <p className="mt-4 text-purple-200 font-mono text-lg">Preparing game...</p>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+          <p className="px-kicker px-blink">Preparing game...</p>
         </div>
       )}
 
       {/* Start screen: only after audio is loaded so content doesn't jump */}
       {!hasStarted && !loadingAudio && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-10 animate-fade-in">
-          <div className="bg-black/50 backdrop-blur-sm rounded-2xl border-2 border-purple-500 p-12 text-center min-w-[22rem] min-h-[18rem] flex flex-col justify-center">
-            <h2 className="text-3xl font-bold text-white mb-4 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              {isDuelMode ? 'Duel Arena' : 'Ready to Play?'}
+          <div className="px-panel p-8 text-center min-w-[22rem] min-h-[18rem] flex flex-col justify-center">
+            <h2 className="px-title text-2xl mb-4">
+              {isDuelMode ? 'DUEL' : 'READY?'}
             </h2>
-            <p className="text-purple-200 mb-3 max-w-md">
+            <p className="text-[10px] mb-3 max-w-md">
               {isDuelMode
                 ? 'Both players must ready up. First to die loses the pot.'
                 : 'Survive as long as you can. The longer you live, the more SOL you earn. Hold E to extract.'}
             </p>
             <div className="min-h-[4rem] flex flex-col justify-center">
             {walletBalanceLamports !== null && (
-              <p className="text-emerald-400 font-semibold mb-2 font-mono">
+              <p className="mb-2 text-[10px]">
                 Wallet: {formatSolBalance(walletBalanceLamports)} SOL
               </p>
             )}
             {!isDuelMode && walletAddress && (
               <div className="mb-4 w-full max-w-xs mx-auto">
-                <label className="block text-purple-200 text-sm font-mono mb-1">Bet amount (SOL)</label>
+                <label className="block text-[10px] mb-1">Bet amount (SOL)</label>
                 <input
                   type="text"
                   autoComplete="off"
                   value={soloBetInput}
                   onChange={(e) => setSoloBetInput(e.target.value)}
                   placeholder="e.g. 0.005"
-                  className="w-full px-4 py-2 bg-black/50 border border-purple-500/50 rounded-lg text-white font-mono placeholder:text-purple-400/50 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent text-center"
+                  className="px-input text-center"
                 />
                 {(() => {
                   const val = parseFloat(soloBetInput);
                   if (soloBetInput.trim() && Number.isFinite(val) && val > 0) {
                     const rateLam = BigInt(Math.round(val * 1e9)) / 15n || 1n;
                     return (
-                      <p className="text-purple-300 mt-2 font-mono text-sm">
+                      <p className="mt-2 text-[10px]">
                         Rate: {formatSol(rateLam)} SOL/sec (break even in 15s)
                       </p>
                     );
@@ -1383,12 +1382,12 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
               </div>
             )}
             {!isDuelMode && !walletAddress && (
-              <p className="text-purple-300 mb-6 max-w-md font-mono text-sm">
-                Connect wallet to set your bet.
+              <p className="mb-6 max-w-md text-[10px]">
+                Connect wallet to set your bet — or play for fun.
               </p>
             )}
             {isDuelMode && lobbyData?.bet && (
-              <p className="text-purple-300 mb-4 max-w-md font-mono text-sm">
+              <p className="mb-4 max-w-md text-[10px]">
                 Pot: {formatSol(BigInt(lobbyData.bet) * 2n)} SOL ({formatSol(BigInt(lobbyData.bet))} SOL each)
               </p>
             )}
@@ -1396,12 +1395,12 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             {isDuelMode && walletAddress && (
               <div className="mb-6 space-y-2">
                 <div className="flex items-center justify-center gap-3">
-                  <div className={`w-3 h-3 rounded-full ${lobbyData?.hostReady ? 'bg-green-400' : 'bg-gray-500'}`} />
-                  <span className="text-white font-mono text-sm">Host {lobbyData?.hostReady ? '- READY' : '- Not ready'}</span>
+                  <div className={`w-3 h-3 ${lobbyData?.hostReady ? 'bg-[var(--px-gold)]' : 'bg-[#888]'}`} />
+                  <span className="text-[10px]">Host {lobbyData?.hostReady ? '- READY' : '- Not ready'}</span>
                 </div>
                 <div className="flex items-center justify-center gap-3">
-                  <div className={`w-3 h-3 rounded-full ${lobbyData?.joinerReady ? 'bg-green-400' : 'bg-gray-500'}`} />
-                  <span className="text-white font-mono text-sm">Joiner {lobbyData?.joinerReady ? '- READY' : '- Not ready'}</span>
+                  <div className={`w-3 h-3 ${lobbyData?.joinerReady ? 'bg-[var(--px-gold)]' : 'bg-[#888]'}`} />
+                  <span className="text-[10px]">Joiner {lobbyData?.joinerReady ? '- READY' : '- Not ready'}</span>
                 </div>
               </div>
             )}
@@ -1413,7 +1412,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     <button
                       onClick={() => void handleConnectWallet('phantom')}
                       disabled={isWalletConnecting || loadingAudio}
-                      className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="px-btn px-btn-start disabled:opacity-60"
                     >
                       {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
                     </button>
@@ -1421,7 +1420,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     <button
                       onClick={() => void handleConnectWallet('privy')}
                       disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
-                      className="px-8 py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-lg hover:from-cyan-500 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/30 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="px-btn px-btn-sea disabled:opacity-60"
                     >
                       {isWalletConnecting && walletConnectTarget === 'privy'
                         ? 'Signing in with email...'
@@ -1434,14 +1433,14 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                   const opponentReady = role === 'host' ? lobbyData?.joinerReady : lobbyData?.hostReady;
                   if (myReady && opponentReady) {
                     return (
-                      <div className="text-emerald-400 font-mono font-bold py-4 animate-pulse">
+                      <div className="text-[10px] py-4 px-blink">
                         {isRequestingVrf ? 'Generating terrain...' : 'Starting countdown...'}
                       </div>
                     );
                   }
                   if (myReady) {
                     return (
-                      <div className="text-emerald-400 font-mono font-bold py-4 animate-pulse">
+                      <div className="text-[10px] py-4 px-blink">
                         Waiting for opponent to ready up...
                       </div>
                     );
@@ -1450,7 +1449,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     <button
                       onClick={() => void handleDuelReady()}
                       disabled={loadingAudio || isPayingBuyIn}
-                      className="px-12 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="px-btn px-btn-gold disabled:opacity-60"
                     >
                       {isPayingBuyIn ? 'Confirm in wallet...' : "I'm Ready"}
                     </button>
@@ -1461,14 +1460,14 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                   <button
                     onClick={() => handleStartPractice()}
                     disabled={loadingAudio}
-                    className="px-8 py-4 bg-gradient-to-r from-fuchsia-600 to-purple-600 text-white font-bold rounded-lg hover:from-fuchsia-500 hover:to-purple-500 transition-all shadow-lg shadow-fuchsia-500/40 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="px-btn px-btn-start disabled:opacity-60"
                   >
                     Play without wallet
                   </button>
                   <button
                     onClick={() => void handleConnectWallet('phantom')}
                     disabled={isWalletConnecting || loadingAudio}
-                    className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="px-btn px-btn-start disabled:opacity-60"
                   >
                     {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
                   </button>
@@ -1476,7 +1475,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                   <button
                     onClick={() => void handleConnectWallet('privy')}
                     disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
-                    className="px-8 py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-lg hover:from-cyan-500 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/30 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="px-btn px-btn-sea disabled:opacity-60"
                   >
                     {isWalletConnecting && walletConnectTarget === 'privy'
                       ? 'Signing in with email...'
@@ -1488,7 +1487,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 <button
                   onClick={() => void handlePayAndStart()}
                   disabled={isPayingBuyIn || isRequestingVrf || loadingAudio}
-                  className="px-12 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-xl disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="px-btn px-btn-start disabled:opacity-60"
                 >
                   {isRequestingVrf
                     ? 'Requesting VRF...'
@@ -1498,8 +1497,8 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                 </button>
               )}
             </div>
-            {statusMessage && <p className="mt-4 text-cyan-300 text-sm font-mono max-w-md break-words">{statusMessage}</p>}
-            {errorMessage && <p className="mt-3 text-red-300 text-sm font-mono max-w-md break-words">{errorMessage}</p>}
+            {statusMessage && <p className="mt-4 text-[10px] max-w-md break-words">{statusMessage}</p>}
+            {errorMessage && <p className="mt-3 text-[10px] text-[#b42318] max-w-md break-words">{errorMessage}</p>}
           </div>
         </div>
       )}
@@ -1507,44 +1506,40 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
       {/* HUD overlay while playing */}
       {gameState && hasStarted && (
         <div className="absolute inset-0 pointer-events-none z-10">
-          <div className="absolute top-8 left-8 bg-black/30 backdrop-blur-sm px-6 py-3 rounded-lg border border-purple-500/30">
-            <div className="text-white font-mono">
-              <div className="text-sm text-purple-300">Time</div>
-              <div className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                {formatSessionTime(
-                  hasExtracted
-                    ? Math.max(getElapsedSeconds(gameState), displayElapsedFallback)
-                    : Math.max(getElapsedSeconds(gameState), displayElapsedFallback)
-                )}
-              </div>
+          <div className="absolute top-8 left-8 px-hud px-5 py-3">
+            <div className="text-[10px] text-[var(--px-gold)]">Time</div>
+            <div className="text-xl text-white">
+              {formatSessionTime(
+                Math.max(getElapsedSeconds(gameState), displayElapsedFallback)
+              )}
             </div>
           </div>
 
           {audioLoaded && (
-            <div className="absolute top-24 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-pink-500/30">
-              <div className="text-xs text-pink-300 font-mono flex items-center gap-2">
-                <span className="inline-block w-2 h-2 bg-pink-400 rounded-full animate-pulse" />
+            <div className="absolute top-24 left-8 px-hud px-4 py-2">
+              <div className="text-[9px] flex items-center gap-2">
+                <span className="inline-block w-2 h-2 bg-[var(--px-pink)] px-blink" />
                 Beat Sync
               </div>
             </div>
           )}
 
-          <div className="absolute top-8 right-8 bg-black/30 backdrop-blur-sm px-5 py-4 rounded-lg border border-purple-500/30">
+          <div className="absolute top-8 right-8 px-hud px-4 py-3 max-w-xs">
             {hasStarted && !isGameOver && !hasExtracted && liveEarned !== null && !isDuelMode ? (
-              <div className="font-mono text-emerald-400">
-                <div className="text-sm text-purple-200/90 uppercase tracking-wider mb-1">SOL earned</div>
-                <div className="text-2xl font-bold tabular-nums">{formatSol(liveEarned)} SOL</div>
+              <div>
+                <div className="text-[9px] text-[var(--px-gold)] mb-1">SOL earned</div>
+                <div className="text-sm tabular-nums">{formatSol(liveEarned)} SOL</div>
               </div>
             ) : (
-              <div className="text-xs text-purple-200 font-mono space-y-1">
+              <div className="text-[9px] space-y-1">
                 <div>Wallet: {walletAddress ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}` : 'Not connected'}</div>
-                {walletProviderName && <div>Provider: {walletProviderName === 'privy' ? 'Privy (Embedded)' : 'Phantom'}</div>}
+                {walletProviderName && <div>Provider: {walletProviderName === 'privy' ? 'Privy' : 'Phantom'}</div>}
                 {walletBalanceLamports !== null && (
-                  <div className="text-emerald-400 font-semibold">Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
+                  <div>Balance: {formatSolBalance(walletBalanceLamports)} SOL</div>
                 )}
                 {terrainSeed !== null && (
-                  <div className="text-cyan-300/90">
-                    Terrain seed: 0x{terrainSeed.toString(16).toUpperCase().padStart(8, '0')}
+                  <div>
+                    Seed: 0x{terrainSeed.toString(16).toUpperCase().padStart(8, '0')}
                   </div>
                 )}
                 {vrfRequestTx && (
@@ -1552,19 +1547,19 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     href={`https://solscan.io/tx/${vrfRequestTx}${RPC_URL.includes('devnet') ? '?cluster=devnet' : ''}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-cyan-400 hover:text-cyan-300 underline block pointer-events-auto"
+                    className="underline block pointer-events-auto"
                   >
                     Verified by ORAO VRF
                   </a>
                 )}
-                {statusMessage && <div className="text-cyan-300">{statusMessage}</div>}
-                {errorMessage && <div className="text-red-300">{errorMessage}</div>}
+                {statusMessage && <div>{statusMessage}</div>}
+                {errorMessage && <div className="text-[#ffb4b4]">{errorMessage}</div>}
               </div>
             )}
           </div>
 
-          <div className="absolute bottom-8 left-8 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-lg border border-purple-500/30">
-            <div className="text-xs text-purple-300 font-mono space-y-1">
+          <div className="absolute bottom-8 left-8 px-hud px-4 py-2">
+            <div className="text-[9px] space-y-1">
               <div>SPACE / CLICK - Jump</div>
               <div>HOLD E (3s) - Extract</div>
               <div>R - Restart</div>
@@ -1573,16 +1568,16 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
 
 
           {hasExtracted && frozenEarned !== null && !isDuelMode && (
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto">
-              <div className="bg-gradient-to-br from-purple-900/90 to-green-900/90 p-12 rounded-2xl border-2 border-green-500 shadow-2xl shadow-green-500/50">
-                <h2 className="text-5xl font-bold text-white mb-6 text-center bg-gradient-to-r from-green-300 to-cyan-300 bg-clip-text text-transparent">
+            <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center pointer-events-auto">
+              <div className="px-panel p-8 max-w-md">
+                <h2 className="px-title text-2xl mb-6 text-center">
                   Congrats!
                 </h2>
-                <div className="text-center mb-8">
-                  <div className="text-emerald-300 font-bold text-4xl mb-2">
+                <div className="text-center mb-8 text-[10px]">
+                  <div className="text-sm mb-2">
                     You earned {formatSol(frozenEarned)} SOL
                   </div>
-                  <div className="text-purple-200/80 text-sm">
+                  <div>
                     Confirm in {walletProviderName === 'privy' ? 'Privy' : 'Phantom'} to receive this amount.
                   </div>
                   {vrfRequestTx && (
@@ -1590,17 +1585,17 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                       href={`https://solscan.io/tx/${vrfRequestTx}${RPC_URL.includes('devnet') ? '?cluster=devnet' : ''}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-4 inline-block text-cyan-400 hover:text-cyan-300 text-sm font-mono underline"
+                      className="mt-4 inline-block underline"
                     >
                       Terrain verified by ORAO VRF
                     </a>
                   )}
                 </div>
                 <div className="flex flex-col gap-3">
-                  <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg">
+                  <button onClick={handleRestart} className="px-btn px-btn-start w-full">
                     Play Again
                   </button>
-                  <Link href="/" className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white hover:shadow-lg hover:shadow-purple-500/25">
+                  <Link href="/" className="px-btn w-full">
                     Back to Homepage
                   </Link>
                 </div>
@@ -1620,96 +1615,80 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
             const potBaseUnits = betBaseUnits * 2n;
 
             return (
-              <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto animate-fade-in">
-                <div className={`p-12 rounded-2xl border-2 shadow-2xl max-w-lg ${
-                  iWon
-                    ? 'bg-gradient-to-br from-purple-900/90 to-green-900/90 border-green-500 shadow-green-500/50'
-                    : isTie
-                      ? 'bg-gradient-to-br from-purple-900/90 to-yellow-900/90 border-yellow-500 shadow-yellow-500/50'
-                      : 'bg-gradient-to-br from-purple-900/90 to-red-900/90 border-red-500 shadow-red-500/50'
-                }`}>
-                  <h2 className={`text-6xl font-bold mb-6 text-center bg-clip-text text-transparent ${
-                    iWon
-                      ? 'bg-gradient-to-r from-green-300 to-cyan-300'
-                      : isTie
-                        ? 'bg-gradient-to-r from-yellow-300 to-orange-300'
-                        : iLost
-                          ? 'bg-gradient-to-r from-red-300 to-pink-300'
-                          : 'bg-gradient-to-r from-purple-400 to-pink-400'
-                  }`}>
+              <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center pointer-events-auto">
+                <div className="px-panel p-8 max-w-lg">
+                  <h2 className="px-title text-xl mb-6 text-center">
                     {iWon ? 'YOU WIN!' : isTie ? 'DRAW!' : iLost ? 'YOU LOSE' : 'Waiting...'}
                   </h2>
-                  <div className="text-center mb-6">
+                  <div className="text-center mb-6 text-[10px]">
                     {iWon ? (
                       <>
-                        <div className="text-emerald-300 font-bold text-2xl mb-2">
+                        <div className="text-sm mb-2">
                           You win: {formatSol(duelClaimAmount ?? potBaseUnits)} SOL
                         </div>
                         {duelClaimAmount !== null && duelClaimAmount < potBaseUnits && (
-                          <div className="text-purple-300/80 font-mono text-xs mb-2">
+                          <div className="mb-2">
                             Capped by current on-chain claimable amount.
                           </div>
                         )}
                         {isSettling && (
-                          <div className="text-cyan-300 font-mono text-sm animate-pulse">
+                          <div className="px-blink">
                             Claiming pot – confirm in wallet...
                           </div>
                         )}
                         {settleSignature && (
-                          <div className="text-emerald-400 font-mono text-sm mt-1">
+                          <div className="mt-1">
                             Pot claimed!
                           </div>
                         )}
                         {errorMessage && !settleSignature && !isSettling && (
-                          <div className="text-red-300 font-mono text-sm mt-1">
+                          <div className="text-[#b42318] mt-1">
                             {errorMessage}
                           </div>
                         )}
                       </>
                     ) : isTie ? (
                       <>
-                        <div className="text-yellow-300 font-bold text-xl mb-2">
+                        <div className="text-sm mb-2">
                           Both died! Each player gets their bet back.
                         </div>
-                        <div className="text-yellow-200/80 font-mono text-sm mb-1">
+                        <div className="mb-1">
                           Refund: {formatSol(duelClaimAmount ?? betBaseUnits)} SOL
                         </div>
                         {isSettling && (
-                          <div className="text-cyan-300 font-mono text-sm animate-pulse">
+                          <div className="px-blink">
                             Refunding – confirm in wallet...
                           </div>
                         )}
                         {settleSignature && (
-                          <div className="text-emerald-400 font-mono text-sm mt-1">
+                          <div className="mt-1">
                             Refund complete!
                           </div>
                         )}
                         {errorMessage && !settleSignature && !isSettling && (
-                          <div className="text-red-300 font-mono text-sm mt-1">
+                          <div className="text-[#b42318] mt-1">
                             {errorMessage}
                           </div>
                         )}
                       </>
                     ) : iLost ? (
-                      <div className="text-red-300 font-bold text-xl mb-2">
+                      <div className="text-sm mb-2">
                         You died first. Opponent wins the pot.
                       </div>
                     ) : (
-                      <div className="text-purple-300 font-mono animate-pulse">
+                      <div className="px-blink">
                         Waiting for opponent...
                       </div>
                     )}
                   </div>
-                  <div className="text-center mb-8">
-                    <div className="text-purple-200/70 font-mono text-sm">
-                      Your time: {formatSessionTime(Math.max(getElapsedSeconds(gameState), displayElapsedFallback))}
-                    </div>
+                  <div className="text-center mb-8 text-[10px]">
+                    Your time: {formatSessionTime(Math.max(getElapsedSeconds(gameState), displayElapsedFallback))}
                   </div>
                   <div className="flex flex-col gap-3">
                     {iWon && !settleSignature && !isSettling && (
                       <button
                         onClick={() => void duelClaimPot()}
-                        className="w-full px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-lg hover:from-green-500 hover:to-emerald-500 transition-all shadow-lg text-center"
+                        className="px-btn px-btn-gold w-full"
                       >
                         Claim Pot
                       </button>
@@ -1717,14 +1696,14 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     {isTie && !settleSignature && !isSettling && (
                       <button
                         onClick={() => void duelRefund()}
-                        className="w-full px-8 py-4 bg-gradient-to-r from-yellow-600 to-orange-600 text-white font-bold rounded-lg hover:from-yellow-500 hover:to-orange-500 transition-all shadow-lg text-center"
+                        className="px-btn px-btn-gold w-full"
                       >
                         Claim Refund
                       </button>
                     )}
                     <Link
                       href="/duels"
-                      className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg text-center hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg"
+                      className="px-btn px-btn-start w-full"
                     >
                       Back to Duels
                     </Link>
@@ -1735,21 +1714,21 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           })()}
 
           {isGameOver && !isDuelMode && (
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center pointer-events-auto animate-fade-in">
-              <div className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 p-12 rounded-2xl border-2 border-purple-500 shadow-2xl shadow-purple-500/50">
-                <h2 className="text-5xl font-bold text-white mb-4 text-center bg-gradient-to-r from-red-300 to-pink-300 bg-clip-text text-transparent">
+            <div className="absolute inset-0 bg-[var(--px-navy)]/80 flex items-center justify-center pointer-events-auto">
+              <div className="px-panel p-8">
+                <h2 className="px-title text-2xl mb-4 text-center">
                   GAME OVER
                 </h2>
-                <div className="text-center mb-8">
-                  <div className="text-lg text-purple-300 mb-2">Time Survived</div>
-                  <div className="text-6xl font-bold text-white">{formatSessionTime(getElapsedSeconds(gameState))}</div>
-                  <div className="text-red-300 mt-3 font-mono">You died. Payout is 0.</div>
+                <div className="text-center mb-8 text-[10px]">
+                  <div className="mb-2">Time Survived</div>
+                  <div className="text-2xl">{formatSessionTime(getElapsedSeconds(gameState))}</div>
+                  <div className="mt-3">You died. Payout is 0.</div>
                 </div>
                 <div className="flex flex-col gap-3">
-                  <button onClick={handleRestart} className="w-full px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50">
+                  <button onClick={handleRestart} className="px-btn px-btn-start w-full">
                     Try Again
                   </button>
-                  <Link href="/" className="w-full px-8 py-4 border-2 border-purple-400/60 text-purple-200 font-bold rounded-lg text-center transition-all hover:border-purple-300 hover:bg-purple-500/20 hover:text-white hover:shadow-lg hover:shadow-purple-500/25">
+                  <Link href="/" className="px-btn w-full">
                     Back to Homepage
                   </Link>
                 </div>
@@ -1758,7 +1737,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
           )}
 
           {isSettling && (
-            <div className="absolute bottom-8 right-8 bg-black/60 px-4 py-2 rounded-lg border border-cyan-400/40 text-cyan-200 font-mono text-sm">
+            <div className="absolute bottom-8 right-8 px-hud px-4 py-2 text-[9px]">
               Settling on devnet...
             </div>
           )}
