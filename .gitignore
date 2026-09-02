@@ -33,7 +33,10 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env
+.env.local
+.env.*.local
+!.env.example
 
 # vercel
 .vercel
@@ -54,3 +57,22 @@ target/
 # Node / Next
 node_modules/
 .next/
+
+# Python / ML
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+checkpoints/
+*.hdf5
+*.weights.h5
+services/ml/**/generated_edm/**
+!services/ml/**/generated_edm/.gitkeep
+services/ml/edm/pretrained/**
+!services/ml/edm/pretrained/.gitkeep
+
+# Build artifacts
+packages/*/dist/

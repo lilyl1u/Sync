@@ -2,7 +2,7 @@
 
 **Beat-synced endless platformer on Solana** : stake SOL, play solo or 1v1 duels, and run to AI-generated music.
 
-> Built at HackIllinois · [Devpost](https://devpost.com/software/sync-mdn04e?ref_content=my-projects-tab&ref_feature=my_projects) · [ML Backend Repo](https://github.com/michellee-wang/sync-ml-api)
+> Built at HackIllinois · [Devpost](https://devpost.com/software/sync-mdn04e?ref_content=my-projects-tab&ref_feature=my_projects)
 
 ---
 
@@ -81,14 +81,16 @@ This requires the Solana CLI and Anchor CLI to be installed and configured. See 
 
 ```
 sync/
+├── apps/web/                 # Next.js frontend
 ├── packages/
-│   └── solana/          # Anchor program for staking, duels, and pool management
-├── src/                 # Next.js app + custom game engine
-│   ├── engine/          # TypeScript game engine (rendering, physics, beat-sync)
-│   ├── components/      # React UI components
-│   └── ...
-├── public/              # Static assets
-└── package.json         # Workspace root
+│   ├── game-engine/          # TypeScript engine (rendering, physics, beat-sync)
+│   ├── solana/               # Anchor program for staking, duels, pool
+│   ├── shared-types/
+│   └── spotify/              # TypeScript Spotify client
+├── services/ml/
+│   ├── lofi/                 # LSTM music gen (Modal) — used by the game
+│   └── edm/                  # EDM remix, MIDI matching, Spotify features
+└── package.json
 ```
 
 ---
@@ -97,7 +99,9 @@ sync/
 
 ### Music Generation
 
-An LSTM model trained on MIDI data generates melodic sequences. The model is hosted as a serverless endpoint on [Modal](https://modal.com), which the frontend calls to get note sequences. [Tone.js](https://tonejs.github.io/) synthesizes the audio in the browser and provides precise beat timing events.
+An LSTM model trained on MIDI data generates melodic sequences (`services/ml/lofi`). The model is hosted as a serverless endpoint on [Modal](https://modal.com), which the frontend calls to get note sequences. [Tone.js](https://tonejs.github.io/) synthesizes the audio in the browser and provides precise beat timing events.
+
+See [`services/ml/README.md`](services/ml/README.md) to train or deploy the music backends.
 
 ### Terrain Generation
 

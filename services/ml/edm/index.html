@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDM Remix Generator</title>
+</head>
+<body>
+    <h1>EDM Remix Generator</h1>
+    <p>Enter your Spotify profile URL to load your tracks, then generate EDM remixes.</p>
+
+    <h2>1. Load Your Tracks</h2>
+    <form id="profileForm">
+        <label for="profileUrl">Spotify Profile URL:</label><br>
+        <input
+            type="text"
+            id="profileUrl"
+            name="profileUrl"
+            placeholder="https://open.spotify.com/user/your_username"
+            size="60"
+            required
+        ><br><br>
+        <button type="submit">Load Tracks</button>
+    </form>
+
+    <div id="profileStatus"></div>
+
+    <hr>
+
+    <div id="tracksSection" hidden>
+        <h2>2. Select Tracks</h2>
+        <p>
+            <button type="button" id="selectAll">Select All</button>
+            <button type="button" id="selectNone">Select None</button>
+            <span id="selectedCount"></span>
+        </p>
+        <table border="1" cellpadding="4">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="toggleAll" checked></th>
+                    <th>#</th>
+                    <th>Track</th>
+                    <th>Artist</th>
+                    <th>Album</th>
+                    <th>Playlist</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="tracksBody"></tbody>
+        </table>
+
+        <br>
+        <h2>3. Generate EDM Remixes</h2>
+        <button type="button" id="generateBtn" disabled>Generate EDM for Selected Tracks</button>
+        <div id="generateStatus"></div>
+
+        <div id="resultsSection" hidden>
+            <h2>Results</h2>
+            <table border="1" cellpadding="4">
+                <thead>
+                    <tr>
+                        <th>Track</th>
+                        <th>Artist</th>
+                        <th>Tempo</th>
+                        <th>Energy</th>
+                        <th>Danceability</th>
+                        <th>File</th>
+                        <th>Download</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <hr>
+
+    <div id="singleSection">
+        <h2>Or: Generate from a Single Track URL</h2>
+        <form id="edmForm">
+            <label for="spotifyUrl">Spotify Track URL:</label><br>
+            <input
+                type="text"
+                id="spotifyUrl"
+                name="spotifyUrl"
+                placeholder="https://open.spotify.com/track/..."
+                size="60"
+                required
+            ><br><br>
+            <button type="submit">Generate EDM Remix</button>
+        </form>
+        <div id="singleStatus">Ready</div>
+        <div id="singleResult" hidden>
+            <h3>Result</h3>
+            <div id="singleResultContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        let loadedTracks = [];
+
+        // === Profile loading ===
+
+        const profileForm = document.getElementById('profileForm');
+        const profileStatus = document.getElementById('profileStatus');
+        const tracksSection = document.getElementById('tracksSection');
+        const tracksBody = document.getElementById('tracksBody');
+        const generateBtn = document.getElementById('generateBtn');
+        const generateStatus = document.getElementById('generateStatus');
+        const resultsSection = document.getElementById('resultsSection');
+        const resultsBody = document.getElementById('resultsBody');
+        const selectedCount = document.getElementById('selectedCount');
+
+        profileForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const profileUrl = document.getElementById('profileUrl').value;
+
+            profileStatus.textContent = 'Loading tracks from profile...';
+            tracksSection.hidden = true;
+            tracksBody.innerHTML = '';
+            resultsSection.hidden = true;
+            resultsBody.innerHTML = '';
+            loadedTracks = [];
+
+            try {
+                const resp = await fetch(API_BASE + '/api/profile/tracks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profile_url: profileUrl })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Failed to load profile');
+                }
+
+                const data = await resp.json();
+                loadedTracks = data.tracks;
+
+                profileStatus.textContent =
+                    'Loaded ' + data.total + ' tracks from ' + data.display_name + "'s playlists.";
+
+                renderTracks();
+                tracksSection.hidden = false;
+                updateSelectedCount();
+                generateBtn.disabled = false;
+
+            } catch (err) {
+                profileStatus.textContent = 'Error: ' + err.message;
+            }
+        });
+
+        function renderTracks() {
+            tracksBody.innerHTML = '';
+            loadedTracks.forEach((track, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td><input type="checkbox" class="track-cb" data-idx="' + i + '" checked></td>' +
+                    '<td>' + (i + 1) + '</td>' +
+                    '<td>' + esc(track.name) + '</td>' +
+                    '<td>' + esc(track.artist) + '</td>' +
+                    '<td>' + esc(track.album) + '</td>' +
+                    '<td>' + esc(track.playlist) + '</td>' +
+                    '<td id="track-status-' + i + '">—</td>';
+                tracksBody.appendChild(tr);
+            });
+
+            document.querySelectorAll('.track-cb').forEach(cb => {
+                cb.addEventListener('change', updateSelectedCount);
+            });
+        }
+
+        function getSelectedIndices() {
+            const cbs = document.querySelectorAll('.track-cb:checked');
+            return Array.from(cbs).map(cb => parseInt(cb.dataset.idx));
+        }
+
+        function updateSelectedCount() {
+            const count = getSelectedIndices().length;
+            selectedCount.textContent = '(' + count + ' of ' + loadedTracks.length + ' selected)';
+            generateBtn.disabled = count === 0;
+        }
+
+        document.getElementById('selectAll').addEventListener('click', () => {
+            document.querySelectorAll('.track-cb').forEach(cb => cb.checked = true);
+            updateSelectedCount();
+        });
+
+        document.getElementById('selectNone').addEventListener('click', () => {
+            document.querySelectorAll('.track-cb').forEach(cb => cb.checked = false);
+            updateSelectedCount();
+        });
+
+        document.getElementById('toggleAll').addEventListener('change', function () {
+            document.querySelectorAll('.track-cb').forEach(cb => cb.checked = this.checked);
+            updateSelectedCount();
+        });
+
+        // === Batch generation ===
+
+        generateBtn.addEventListener('click', async () => {
+            const indices = getSelectedIndices();
+            if (indices.length === 0) return;
+
+            generateBtn.disabled = true;
+            generateStatus.textContent = 'Generating 0/' + indices.length + '...';
+            resultsSection.hidden = false;
+            resultsBody.innerHTML = '';
+
+            let done = 0;
+
+            for (const idx of indices) {
+                const track = loadedTracks[idx];
+                const statusCell = document.getElementById('track-status-' + idx);
+                statusCell.textContent = 'Generating...';
+
+                try {
+                    const resp = await fetch(API_BASE + '/api/edm/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ spotify_url: track.url })
+                    });
+
+                    if (!resp.ok) {
+                        const err = await resp.json();
+                        throw new Error(err.detail || 'Failed');
+                    }
+
+                    const data = await resp.json();
+                    statusCell.textContent = 'Done';
+
+                    const dlUrl = API_BASE + data.download_url;
+                    const tr = document.createElement('tr');
+                    tr.innerHTML =
+                        '<td>' + esc(data.track_name) + '</td>' +
+                        '<td>' + esc(data.artist) + '</td>' +
+                        '<td>' + data.features.tempo.toFixed(1) + ' BPM</td>' +
+                        '<td>' + data.features.energy.toFixed(2) + '</td>' +
+                        '<td>' + data.features.danceability.toFixed(2) + '</td>' +
+                        '<td>' + esc(data.filename) + '</td>' +
+                        '<td><audio controls preload="none" src="' + esc(dlUrl) + '"></audio><br>' +
+                        '<a href="' + esc(dlUrl) + '" download>Download</a></td>';
+                    resultsBody.appendChild(tr);
+
+                } catch (err) {
+                    statusCell.textContent = 'Error: ' + err.message;
+                }
+
+                done++;
+                generateStatus.textContent = 'Generating ' + done + '/' + indices.length + '...';
+            }
+
+            generateStatus.textContent = 'Done! Generated ' + done + ' remixes.';
+            generateBtn.disabled = false;
+        });
+
+        // === Single track form (kept as fallback) ===
+
+        const edmForm = document.getElementById('edmForm');
+        const singleStatus = document.getElementById('singleStatus');
+        const singleResult = document.getElementById('singleResult');
+        const singleResultContent = document.getElementById('singleResultContent');
+
+        edmForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const spotifyUrl = document.getElementById('spotifyUrl').value;
+
+            singleStatus.textContent = 'Extracting Spotify features...';
+            singleResult.hidden = true;
+            singleResultContent.innerHTML = '';
+
+            try {
+                const resp = await fetch(API_BASE + '/api/edm/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ spotify_url: spotifyUrl })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Generation failed');
+                }
+
+                const data = await resp.json();
+
+                if (data.status === 'success') {
+                    singleStatus.textContent = 'Complete!';
+                    singleResult.hidden = false;
+                    const singleDlUrl = API_BASE + data.download_url;
+                    singleResultContent.innerHTML =
+                        '<p><b>Track:</b> ' + esc(data.track_name) + '</p>' +
+                        '<p><b>Artist:</b> ' + esc(data.artist) + '</p>' +
+                        '<p><b>Tempo:</b> ' + data.features.tempo.toFixed(1) + ' BPM</p>' +
+                        '<p><b>Energy:</b> ' + data.features.energy.toFixed(2) + '</p>' +
+                        '<p><b>Danceability:</b> ' + data.features.danceability.toFixed(2) + '</p>' +
+                        '<hr>' +
+                        '<p><b>Generated File:</b> ' + esc(data.filename) + '</p>' +
+                        '<p><b>Size:</b> ' + (data.size_bytes / 1024).toFixed(1) + ' KB</p>' +
+                        '<p><audio controls src="' + esc(singleDlUrl) + '"></audio></p>' +
+                        '<p><a href="' + esc(singleDlUrl) + '" download>Download EDM Remix</a></p>';
+                } else {
+                    throw new Error(data.message || 'Generation failed');
+                }
+
+            } catch (err) {
+                singleStatus.textContent = 'Error: ' + err.message;
+                singleResult.hidden = true;
+            }
+        });
+
+        function esc(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
