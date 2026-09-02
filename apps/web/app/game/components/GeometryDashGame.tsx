@@ -3,8 +3,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { doc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { useModalStatus, usePrivy, useWallets, useSolanaWallets } from '@privy-io/react-auth';
 import type { ConnectedSolanaWallet } from '@privy-io/react-auth';
+import { usePrivyGame } from '@/app/lib/privy-bridge';
 import {
   GameEngine,
   Renderer,
@@ -178,17 +178,14 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMes
 export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }: GeometryDashGameProps) {
   const isDuelMode = Boolean(duelCode && role);
   const {
-    ready: isPrivyReady,
-    authenticated: isPrivyAuthenticated,
-    login: privyLogin,
-  } = usePrivy();
-  const { isOpen: isPrivyModalOpen } = useModalStatus();
-  const { wallets: privyWallets } = useWallets();
-  const {
-    wallets: solanaWallets,
-    ready: solanaWalletsReady,
-    createWallet: createSolanaWallet,
-  } = useSolanaWallets();
+    isConfigured: isPrivyConfigured,
+    isPrivyReady,
+    isPrivyAuthenticated,
+    privyLogin,
+    solanaWallets,
+    solanaWalletsReady,
+    createSolanaWallet,
+  } = usePrivyGame();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameContainerRef = useRef<HTMLDivElement>(null);
@@ -1060,6 +1057,34 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
     }
   }, [hasStarted, walletAddress, audioLoaded, playAudio, buildLevelAndEngine, isDuelMode, soloBetInput]);
 
+  const handleStartPractice = useCallback(() => {
+    if (hasStarted || isDuelMode) return;
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    setTerrainSeed(seed);
+    const engine = buildLevelAndEngine(seed);
+    if (!engine) {
+      setErrorMessage('Failed to build level');
+      return;
+    }
+    engineRef.current = engine;
+    setPoolConfig(null);
+    setSoloBetLamports(null);
+    setBuyInSignature(null);
+    setSettleSignature(null);
+    setFrozenEarned(null);
+    frozenEarnedRef.current = null;
+    hasSettledCurrentRunRef.current = true;
+    setDisplayElapsedFallback(0);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    engine.start();
+    setHasStarted(true);
+    setIsGameOver(false);
+    setHasExtracted(false);
+    gameContainerRef.current?.focus();
+    if (audioLoaded) playAudio();
+  }, [hasStarted, isDuelMode, buildLevelAndEngine, audioLoaded, playAudio]);
+
   useEffect(() => {
     if (!autoStartAfterPrivyConnect) return;
     if (!walletAddress || hasStarted || loadingAudio || isWalletConnecting || isPayingBuyIn || isRequestingVrf) return;
@@ -1392,6 +1417,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                     >
                       {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
                     </button>
+                    {isPrivyConfigured && (
                     <button
                       onClick={() => void handleConnectWallet('privy')}
                       disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
@@ -1401,6 +1427,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                         ? 'Signing in with email...'
                         : 'Use Email (Privy)'}
                     </button>
+                    )}
                   </>
                 ) : (() => {
                   const myReady = role === 'host' ? lobbyData?.hostReady : lobbyData?.joinerReady;
@@ -1432,12 +1459,20 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
               ) : !walletAddress ? (
                 <>
                   <button
+                    onClick={() => handleStartPractice()}
+                    disabled={loadingAudio}
+                    className="px-8 py-4 bg-gradient-to-r from-fuchsia-600 to-purple-600 text-white font-bold rounded-lg hover:from-fuchsia-500 hover:to-purple-500 transition-all shadow-lg shadow-fuchsia-500/40 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    Play without wallet
+                  </button>
+                  <button
                     onClick={() => void handleConnectWallet('phantom')}
                     disabled={isWalletConnecting || loadingAudio}
                     className="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg shadow-purple-500/50 text-lg disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     {isWalletConnecting && walletConnectTarget === 'phantom' ? 'Connecting Phantom...' : 'Connect Phantom'}
                   </button>
+                  {isPrivyConfigured && (
                   <button
                     onClick={() => void handleConnectWallet('privy')}
                     disabled={isWalletConnecting || loadingAudio || !isPrivyReady}
@@ -1447,6 +1482,7 @@ export function GeometryDashGame({ width = 1200, height = 600, duelCode, role }:
                       ? 'Signing in with email...'
                       : 'Use Email (Privy)'}
                   </button>
+                  )}
                 </>
               ) : (
                 <button

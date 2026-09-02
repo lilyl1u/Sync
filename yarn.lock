@@ -2100,6 +2100,11 @@
     source-map-js "^1.2.1"
     tailwindcss "4.2.1"
 
+"@tailwindcss/oxide-darwin-arm64@4.2.1":
+  version "4.2.1"
+  resolved "https://registry.npmjs.org/@tailwindcss/oxide-darwin-arm64/-/oxide-darwin-arm64-4.2.1.tgz"
+  integrity sha512-q/LHkOstoJ7pI1J0q6djesLzRvQSIfEto148ppAd+BVQK0JYjQIFSK3JgYZJa+Yzi0DDa52ZsQx2rqytBnf8Hw==
+
 "@tailwindcss/oxide@4.2.1":
   version "4.2.1"
   resolved "https://registry.npmjs.org/@tailwindcss/oxide/-/oxide-4.2.1.tgz"

@@ -61,7 +61,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to play.
 
-> **Note:** The game is playable without a wallet. Staking and duel features require a connected Solana wallet.
+> **Note:** The game is playable without a wallet. Staking and email login need `NEXT_PUBLIC_PRIVY_APP_ID` in `apps/web/.env.local` (see `apps/web/.env.example`) or Phantom.
 
 ---
 

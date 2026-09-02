@@ -3,6 +3,7 @@
 import { PrivyProvider, type PrivyClientConfig } from '@privy-io/react-auth';
 import { useEffect, useState, type ReactNode } from 'react';
 import { PrivyGlobalLogoutButton } from './components/PrivyGlobalLogoutButton';
+import { isPrivyConfigured, PrivyGameBridge } from './lib/privy-bridge';
 
 type ProvidersProps = {
   children: ReactNode;
@@ -18,18 +19,17 @@ export function Providers({ children }: ProvidersProps) {
     setMounted(true);
   }, []);
 
-  if (!privyAppId || !privyAppId.trim()) {
-    throw new Error('Missing NEXT_PUBLIC_PRIVY_APP_ID. Add it to apps/web/.env.local to enable Privy wallets.');
-  }
-
   if (!mounted) {
     return null;
+  }
+
+  if (!isPrivyConfigured || !privyAppId?.trim()) {
+    return <>{children}</>;
   }
 
   const privyConfig: PrivyClientConfig = {
     loginMethods: ['email'],
     embeddedWallets: {
-      // Backward-compatible top-level setting for apps still reading createOnLogin here.
       createOnLogin: 'users-without-wallets',
       solana: {
         createOnLogin: 'users-without-wallets',
@@ -49,8 +49,10 @@ export function Providers({ children }: ProvidersProps) {
       {...(privyClientId ? { clientId: privyClientId } : {})}
       config={privyConfig}
     >
-      {children}
-      <PrivyGlobalLogoutButton />
+      <PrivyGameBridge>
+        {children}
+        <PrivyGlobalLogoutButton />
+      </PrivyGameBridge>
     </PrivyProvider>
   );
 }
